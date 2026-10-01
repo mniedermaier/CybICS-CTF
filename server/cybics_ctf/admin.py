@@ -5,9 +5,11 @@ form that changes state carries a CSRF token.
 import csv
 import io
 import json
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from flask import Blueprint, Response, abort, current_app, flash, redirect, render_template, request, url_for
+from werkzeug.exceptions import HTTPException
+from werkzeug.routing import RequestRedirect as RoutingRequestRedirect
 
 from . import ctf
 from .api import invalidate_board
@@ -74,13 +76,13 @@ def _back(event_id, page="event"):
 @bp.errorhandler(HashingBusy)
 def _busy(_exc):
     flash("The server is busy hashing passwords. Try again in a few seconds.", "error")
-    return redirect(request.referrer or url_for("admin.events"))
+    return _back_here()
 
 
 @bp.errorhandler(CTFError)
 def _ctf_error(exc):
     flash(exc.message, "error")
-    return redirect(request.referrer or url_for("admin.events"))
+    return _back_here()
 
 
 # ---------- login ----------
@@ -113,12 +115,32 @@ def login():
 
 
 def _safe_next(target):
-    """Only ever redirect into the admin area, whatever the browser would make of the value."""
-    if (not target.startswith("/admin/") or any(ord(c) < 0x21 or c == "\\" for c in target)
-            or urlsplit(target).netloc or target.startswith("//")
-            or any(part in (".", "..") for part in target.split("?")[0].split("/"))):
-        return url_for("admin.events")
-    return target
+    """
+    A redirect target inside the admin area, rebuilt from our own routing
+    table: the result is always a URL that url_for() generated for an admin
+    page, never the client's string, whatever a browser would make of it.
+    """
+    fallback = url_for("admin.events")
+    if not isinstance(target, str) or any(ord(c) < 0x21 or c == "\\" for c in target):
+        return fallback
+    parts = urlsplit(target)
+    if parts.scheme or parts.netloc or not parts.path.startswith("/admin/"):
+        return fallback
+    try:
+        endpoint, values = current_app.url_map.bind("localhost").match(parts.path, method="GET")
+    except (HTTPException, RoutingRequestRedirect):
+        return fallback
+    if not endpoint.startswith("admin.") or endpoint in ("admin.login", "admin.login_link_page"):
+        return fallback
+    # url_for() reads "_external", "_scheme" and friends as options, so those never pass.
+    query = {k: v for k, v in parse_qsl(parts.query) if k not in values and not k.startswith("_")}
+    return url_for(endpoint, **values, **query)
+
+
+def _back_here():
+    """Back to the admin page the form came from (same site only), else the event list."""
+    parts = urlsplit(request.referrer or "")
+    return redirect(_safe_next(parts.path + ("?" + parts.query if parts.query else "")))
 
 
 @bp.get("/login/link/<token>")

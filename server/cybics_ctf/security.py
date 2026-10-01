@@ -199,11 +199,27 @@ def verify_password(password_hash, password):
     return _with_hashing_slot(check_password_hash, password_hash, password)
 
 
+_fingerprints = {}
+_fingerprint_lock = threading.Lock()
+
+
 def _password_fingerprint():
-    """Ties a session to the current admin password: changing it logs everyone out."""
+    """
+    Ties a session to the current admin password: changing it logs everyone
+    out. Derived with scrypt (salted with the secret key), computed once per
+    password and cached, so the password never meets a fast hash.
+    """
     key = current_app.config["SECRET_KEY"]
     key = key.encode() if isinstance(key, str) else key
-    return hmac.new(key, current_app.config["ADMIN_PASSWORD"].encode(), hashlib.sha256).hexdigest()[:32]
+    password = current_app.config["ADMIN_PASSWORD"].encode()
+    cache_key = (key, password)
+    with _fingerprint_lock:
+        fingerprint = _fingerprints.get(cache_key)
+        if fingerprint is None:
+            fingerprint = hashlib.scrypt(password, salt=key, n=2**14, r=8, p=1, dklen=16).hex()
+            _fingerprints.clear()   # only the current password matters
+            _fingerprints[cache_key] = fingerprint
+    return fingerprint
 
 
 def start_admin_session():

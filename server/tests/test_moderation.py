@@ -997,3 +997,27 @@ def test_first_blood_bonus_is_validated(admin, event, app):
     assert b"between 0 and 100" in resp.data
     with app.app_context():
         assert ctf.get_event(get_db(), event["id"])["first_blood_bonus"] == 0
+
+
+# ---------- CodeQL findings ----------
+
+@pytest.mark.parametrize("referrer", ["https://evil.example/phish", "//evil.example/x",
+                                      "http://localhost/admin/../../evil", "",
+                                      "/admin/?_external=1&_scheme=https"])
+def test_error_redirects_never_follow_a_foreign_referrer(admin, event, referrer):
+    resp = admin.post(f"/admin/events/{event['id']}/challenges/1", data={**CSRF, "points": "x"},
+                      headers={"Referer": referrer})
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/admin/"
+
+
+def test_error_redirect_returns_to_the_admin_page_it_came_from(admin, event):
+    resp = admin.post(f"/admin/events/{event['id']}/challenges/1", data={**CSRF, "points": "x"},
+                      headers={"Referer": f"http://localhost/admin/events/{event['id']}/challenges"})
+    assert resp.headers["Location"] == f"/admin/events/{event['id']}/challenges"
+
+
+def test_error_redirect_keeps_the_page_query(admin, event):
+    resp = admin.post(f"/admin/events/{event['id']}/challenges/1", data={**CSRF, "points": "x"},
+                      headers={"Referer": f"http://localhost/admin/events/{event['id']}/instances?all=1"})
+    assert resp.headers["Location"] == f"/admin/events/{event['id']}/instances?all=1"
