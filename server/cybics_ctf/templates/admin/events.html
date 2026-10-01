@@ -1,0 +1,58 @@
+{% extends "admin/layout.html" %}
+{% block title %}Events{% endblock %}
+{% block content %}
+<h1>Events</h1>
+<div class="panel">
+  {% if rows %}
+  <table>
+    <thead><tr><th>Event</th><th>State</th><th>Join code</th><th class="num">Challenges</th>
+               <th class="num">Teams</th><th class="num">Instances</th><th>Created</th></tr></thead>
+    <tbody>
+    {% for e, c in rows %}
+      <tr><td><a href="{{ url_for('admin.event', event_id=e.id) }}">{{ e.name }}</a>
+              <div class="muted mono">{{ e.slug }}</div></td>
+          <td><span class="badge state-{{ e.state }}">{{ e.state }}</span></td>
+          <td class="mono">{{ e.join_code }}</td>
+          <td class="num">{{ c.challenges }}</td><td class="num">{{ c.teams }}</td>
+          <td class="num">{{ c.instances }}</td><td class="muted">{{ e.created_at|time }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No events yet. Create one below.</p>{% endif %}
+</div>
+<div class="panel">
+  <h2>Lockouts</h2>
+  <p class="muted">Addresses that hit a limit for failed requests. Behind a shared NAT address, one participant
+     can trip these for the whole room; valid instances keep reporting either way.</p>
+  {% if lockouts %}
+  <table>
+    <thead><tr><th>Address</th><th>Limit reached for</th></tr></thead>
+    <tbody>{% for l in lockouts %}<tr><td class="mono">{{ l.address }}</td><td>{{ l.what }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <form method="post" action="{{ url_for('admin.clear_lockouts') }}" data-confirm="Clear all lockouts?">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button class="secondary" type="submit">Clear all lockouts</button>
+  </form>
+  {% else %}<p class="muted">None right now.</p>{% endif %}
+</div>
+<div class="panel">
+  <h2>Recent organiser logins</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Who</th><th>What</th></tr></thead>
+    <tbody>
+    {% for e in logins %}
+      <tr><td class="muted">{{ e.created_at|time }}</td><td class="mono">{{ e.actor }}</td><td>{{ e.action }}</td></tr>
+    {% else %}<tr><td colspan="3" class="muted">None yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="panel">
+  <h2>New event</h2>
+  <form method="post" action="{{ url_for('admin.create_event') }}" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="text" name="name" placeholder="Name, e.g. CybICS Workshop 2026" aria-label="Event name" required size="32">
+    <input type="text" name="slug" placeholder="slug, e.g. workshop-2026" aria-label="Event slug (used in the scoreboard URL)" pattern="[a-z0-9][a-z0-9\-]{0,62}" required>
+    <button type="submit">Create</button>
+  </form>
+</div>
+{% endblock %}

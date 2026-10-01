@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ event.name }} &middot; Scoreboard{% endblock %}
+{% block body_class %}board{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='board.css') }}">{% endblock %}
+{% block content %}
+{# Animated control-room backdrop: a plant network drawn on the canvas by
+   board-bg.js, drifting glows and a receding grid from board.css. Purely
+   decorative, hidden from assistive technology. #}
+<div class="board-bg" aria-hidden="true">
+  <div class="glow glow-a"></div><div class="glow glow-b"></div><div class="glow glow-c"></div>
+  <div class="floor"></div>
+  <canvas id="network"></canvas>
+</div>
+
+<div class="board-app" data-scoreboard="{{ url_for('api.event_scoreboard', slug=event.slug) }}">
+  <header class="board-top">
+    <div class="title">
+      <img class="board-logo" src="{{ url_for('static', filename='img/cybics-logo.png') }}" alt="CybICS" width="196" height="40">
+      <h1>{{ event.name }}</h1>
+    </div>
+    <div class="meta">
+      <span class="live {{ 'is-live' if event.state == 'running' }}" id="live"><span class="dot"></span><span id="state">{{ event.state }}</span></span>
+      <span class="clock" id="elapsed" data-started="{{ event.started_at or '' }}"
+            data-finished="{{ event.finished_at or '' }}">--:--:--</span>
+      <span class="updated">updated <span id="updated">now</span></span>
+    </div>
+    <span id="board-status" class="sr-only" role="status"></span>
+  </header>
+
+  <div class="board-grid">
+    <section class="ranking" aria-label="Ranking">
+      <div class="ranking-head"><span>#</span><span>Team</span><span class="num">Solves</span><span class="num">Points</span></div>
+      <ol class="rows" id="scores">
+      {% for e in board %}
+        <li class="row {% if e.rank <= 3 and e.score > 0 %}top{{ e.rank }}{% endif %}" data-team="{{ e.name }}">
+          <span class="rank">{{ e.rank }}</span>
+          <span class="team"><span class="line"><span class="name">{{ e.name }}</span></span><span class="bar"><span class="fill"></span></span></span>
+          <span class="solves num">{{ e.solves }}</span>
+          <span class="score num">{{ e.score }}</span>
+        </li>
+      {% endfor %}
+      </ol>
+      <p class="empty" id="scores-empty" {{ 'hidden' if board }}>Waiting for the first team&hellip;</p>
+      <div class="ranking-foot" id="pages" aria-hidden="true"></div>
+    </section>
+
+    <aside class="activity" aria-label="Latest solves">
+      <h2>Latest solves <span class="bonus-rule" id="bonus-rule" {{ 'hidden' if not event.first_blood_bonus }}>first blood +<span id="bonus-pct">{{ event.first_blood_bonus }}</span>%</span></h2>
+      <p class="empty" id="feed-empty" {{ 'hidden' if recent }}>No solves yet. They show up here as they happen.</p>
+      <ul class="feed" id="feed">
+      {% for s in recent %}
+        <li class="{{ 'blood-item' if s.first_blood }}"><strong>{{ s.team }}</strong> solved <span class="chal">{{ s.title }}</span>
+            <span class="pts">+{{ s.points }}</span>
+            {% if s.first_blood and s.first_blood_bonus %}<span class="bonus">+{{ s.points * s.first_blood_bonus // 100 }} bonus</span>{% endif %}
+            {% if s.first_blood %}<span class="blood">first blood</span>{% endif %}
+            <span class="when">{{ s.received_at|ago }}</span></li>
+      {% endfor %}
+      </ul>
+    </aside>
+  </div>
+
+  <div class="announce" id="announce" aria-live="assertive" hidden>
+    <div class="announce-kicker" id="announce-kicker">First blood</div>
+    <div class="announce-team" id="announce-team"></div>
+    <div class="announce-chal" id="announce-chal"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='scoreboard.js') }}"></script>
+<script src="{{ url_for('static', filename='board-bg.js') }}"></script>
+{% endblock %}

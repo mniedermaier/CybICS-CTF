@@ -1,0 +1,37 @@
+{% extends "admin/layout.html" %}
+{% block title %}Instances &middot; {{ event.name }}{% endblock %}
+{% block body_class %}autorefresh{% endblock %}
+{% block content %}
+<h1>Instances</h1>
+<p class="muted">Refreshes every 30 seconds. An instance is online if it checked in within the last {{ config.ONLINE_WINDOW }} seconds.
+  {% if show_all %}<a href="{{ url_for('admin.instances', event_id=event.id) }}">Hide revoked</a>
+  {% elif revoked %}{{ revoked }} revoked instance(s) hidden: <a href="{{ url_for('admin.instances', event_id=event.id, all=1) }}">show them</a>{% endif %}</p>
+<div class="panel">
+  <table>
+    <thead><tr><th>Status</th><th>Team</th><th>Kind</th><th>Device / host</th><th>CybICS</th>
+               <th>Services</th><th>Address</th><th>Last seen</th><th></th></tr></thead>
+    <tbody>
+    {% for i in instances %}
+      <tr class="{{ 'muted' if i.revoked }}">
+        <td>{% if i.revoked %}<span class="badge">revoked</span>
+            {% elif i.online %}<span class="badge ok">online</span>
+            {% else %}<span class="badge warn">offline</span>{% endif %}</td>
+        <td>{{ i.team }}</td>
+        <td>{{ i.kind }}</td>
+        <td class="mono">{{ ('cybics-' ~ i.device_uid) if i.device_uid else (i.hostname or '-') }}
+            {% if i.uid_teams > 1 %}<span class="badge bad" title="Another team has a live instance with this board UID. UIDs are broadcast in the SSID and can be copied.">UID in {{ i.uid_teams }} teams</span>{% endif %}
+            <div class="muted" title="{{ i.id }}">{{ i.id[:8] }}</div>
+            {% if i.status %}<details><summary class="muted">status</summary><pre class="status">{{ i.status_pretty }}</pre></details>{% endif %}</td>
+        <td>{{ i.cybics_version or '-' }}{% if i.mode %} <span class="muted">({{ i.mode }})</span>{% endif %}</td>
+        <td>{% if i.services_total %}{{ i.services_up }}/{{ i.services_total }} up{% else %}<span class="muted">-</span>{% endif %}</td>
+        <td class="mono">{{ i.remote_addr or '-' }}</td>
+        <td class="muted">{{ i.last_seen|ago }}</td>
+        <td>{% if not i.revoked %}<form class="inline" method="post" action="{{ url_for('admin.instance_revoke', event_id=event.id, instance_id=i.id) }}" data-confirm="Revoke this instance? It must enrol again to report.">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="danger" type="submit">Revoke</button></form>{% endif %}</td></tr>
+    {% else %}
+      <tr><td colspan="9" class="muted">No CybICS has enrolled yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

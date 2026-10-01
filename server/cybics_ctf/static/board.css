@@ -1,0 +1,277 @@
+/* Projector scoreboard: a CybICS control room.
+   Loaded on the scoreboard page only, on top of style.css, whose theme tokens
+   it uses, so light and dark both work. Every animation stops under
+   prefers-reduced-motion (bottom of the file). */
+
+:root {
+  --board-bg-1: #0c0d10;
+  --board-bg-2: #15171c;
+  --card: rgba(30, 32, 38, 0.72);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --card-hi: rgba(255, 107, 0, 0.16);
+  --grid-line: rgba(255, 107, 0, 0.16);
+  --glow-1: rgba(255, 107, 0, 0.30);
+  --glow-2: rgba(255, 165, 0, 0.16);
+  --glow-3: rgba(77, 166, 255, 0.14);
+  --up: #3ddc71;
+  --down: #ff5c5c;
+  --row-h: clamp(3.2rem, 6.2vh, 5.2rem);
+}
+:root[data-theme="light"] {
+  --board-bg-1: #f3f4f7;
+  --board-bg-2: #e6e9ef;
+  --card: rgba(255, 255, 255, 0.78);
+  --card-border: rgba(15, 23, 42, 0.10);
+  --card-hi: rgba(255, 107, 0, 0.12);
+  --grid-line: rgba(194, 65, 12, 0.14);
+  --glow-1: rgba(255, 107, 0, 0.18);
+  --glow-2: rgba(255, 165, 0, 0.12);
+  --glow-3: rgba(77, 166, 255, 0.12);
+  --up: #15803d;
+  --down: #c62828;
+}
+
+/* The page chrome steps back: the board is the show. */
+body.board { background: var(--board-bg-1); overflow-x: hidden; }
+/* The site header shrinks to a floating corner (theme toggle, log out), so
+   the board gets the whole screen height. */
+body.board header.top { position: absolute; top: 0; right: 0; left: auto; padding: .5rem 1rem; background: transparent;
+                        box-shadow: none; border-bottom: 0; z-index: 5; }
+body.board header.top nav { display: none; }
+/* Only the theme toggle floats over the board; log in/out live on the other
+   pages. The header row keeps room for it, so nothing ever sits underneath. */
+body.board header.top .header-actions > :not(.theme-toggle) { display: none; }
+.board-top { padding-right: 3.25rem; }
+body.board header.top .brand { visibility: hidden; }
+body.board footer { display: none; }
+body.board main { max-width: none; padding: clamp(1rem, 2.5vh, 2rem) clamp(1rem, 2.5vw, 3rem); position: relative; z-index: 1; }
+
+
+/* ---------- animated backdrop ---------- */
+
+.board-bg { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+            background: radial-gradient(ellipse at 50% 0%, var(--board-bg-2), var(--board-bg-1) 70%); }
+.board-bg canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Soft glows from radial gradients, not filter: blur(): a blur filter on a
+   moving element is re-rendered every frame, which costs a projector PC
+   without a GPU a whole CPU core. Only transform is animated. */
+.glow { position: absolute; border-radius: 50%; will-change: transform; }
+.glow-a { width: 70vw; height: 70vw; left: -22vw; top: -28vw; background: radial-gradient(circle, var(--glow-1), transparent 65%); animation: drift-a 26s ease-in-out infinite alternate; }
+.glow-b { width: 60vw; height: 60vw; right: -20vw; top: 2vh; background: radial-gradient(circle, var(--glow-2), transparent 65%); animation: drift-b 32s ease-in-out infinite alternate; }
+.glow-c { width: 65vw; height: 65vw; left: 18vw; bottom: -38vw; background: radial-gradient(circle, var(--glow-3), transparent 65%); animation: drift-c 38s ease-in-out infinite alternate; }
+@keyframes drift-a { to { transform: translate(18vw, 14vh) scale(1.15); } }
+@keyframes drift-b { to { transform: translate(-16vw, 22vh) scale(0.9); } }
+@keyframes drift-c { to { transform: translate(-12vw, -18vh) scale(1.2); } }
+
+/* A grid floor receding to the horizon, scrolling towards the viewer. */
+.floor { position: absolute; left: -50%; right: -50%; bottom: -10%; height: 55%;
+         background-image:
+           linear-gradient(var(--grid-line) 1px, transparent 1px),
+           linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+         background-size: 64px 64px;
+         transform: perspective(420px) rotateX(62deg);
+         transform-origin: 50% 0;
+         mask-image: linear-gradient(to top, black 10%, transparent 85%);
+         -webkit-mask-image: linear-gradient(to top, black 10%, transparent 85%);
+         will-change: transform;
+         animation: floor 6s linear infinite; }
+/* Moving the plane by exactly one grid cell loops seamlessly, and a
+   transform animation stays on the compositor (no repaint per frame). */
+@keyframes floor { from { transform: perspective(420px) rotateX(62deg) translateY(-64px); }
+                   to   { transform: perspective(420px) rotateX(62deg) translateY(0); } }
+
+/* ---------- header ---------- */
+
+.board-app { position: relative; }
+.board-top { display: flex; align-items: center; justify-content: space-between; gap: 1rem 2rem;
+             flex-wrap: wrap; margin: 0 0 clamp(1rem, 2vh, 2rem); }
+.board-top .title { display: flex; align-items: center; gap: clamp(.75rem, 1.5vw, 1.5rem); min-width: 0; }
+.board-logo { height: clamp(2rem, 4.5vh, 3.4rem); width: auto; filter: drop-shadow(0 0 18px rgba(255, 107, 0, .35)); }
+.board-top h1 { margin: 0; font-size: clamp(1.5rem, 3.4vw, 3.4rem); letter-spacing: -.02em; line-height: 1.1;
+                color: var(--heading); text-shadow: 0 2px 24px rgba(0, 0, 0, .35); }
+.board-top .meta { display: flex; align-items: center; gap: clamp(.75rem, 1.5vw, 1.75rem); flex-wrap: wrap; }
+
+.live { display: inline-flex; align-items: center; gap: .5rem; padding: .3rem .9rem; border-radius: 999px;
+        font: 700 clamp(.8rem, 1vw, 1.05rem) var(--mono); letter-spacing: .14em; text-transform: uppercase;
+        color: var(--muted); border: 1px solid var(--card-border); background: var(--card); backdrop-filter: blur(8px); }
+.live .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--muted); }
+.live.is-live { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.live.is-live .dot { background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 1.8s ease-out infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent); }
+                   100% { box-shadow: 0 0 0 .8rem transparent; } }
+.clock { font: 700 clamp(1.1rem, 2vw, 2.2rem) var(--mono); color: var(--heading); font-variant-numeric: tabular-nums; }
+.updated { color: var(--muted); font-size: .85rem; }
+#updated.stale { color: var(--warn); font-weight: 600; }
+
+/* ---------- layout ---------- */
+
+.board-grid { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(18rem, 1fr); gap: clamp(1rem, 2vw, 2rem); align-items: start; }
+@media (max-width: 1000px) { .board-grid { grid-template-columns: 1fr; } }
+
+.ranking, .activity { background: var(--card); border: 1px solid var(--card-border); border-radius: 18px;
+                      padding: clamp(.75rem, 1.5vw, 1.5rem); backdrop-filter: blur(8px);
+                      -webkit-backdrop-filter: blur(8px); box-shadow: 0 20px 60px rgba(0, 0, 0, .35); }
+
+.empty { color: var(--muted); text-align: center; padding: 2rem 0; margin: 0; }
+
+/* ---------- ranking rows ---------- */
+
+.ranking-head, .row { display: grid; grid-template-columns: clamp(3rem, 5vw, 5.5rem) minmax(0, 1fr) clamp(4rem, 7vw, 8rem) clamp(5.5rem, 10vw, 11rem);
+                      align-items: center; gap: clamp(.5rem, 1vw, 1.25rem); }
+.ranking-head { padding: 0 clamp(.75rem, 1.2vw, 1.25rem) .6rem; color: var(--muted); font-size: .78rem;
+                font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.num { text-align: right; }
+.rows { list-style: none; margin: 0; padding: 0; position: relative; }
+.row { position: relative; min-height: var(--row-h); margin-bottom: .55rem;
+       padding: 0 clamp(.75rem, 1.2vw, 1.25rem); border-radius: 14px;
+       background: linear-gradient(90deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .015));
+       border: 1px solid var(--card-border); will-change: transform; }
+:root[data-theme="light"] .row { background: linear-gradient(90deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .6)); }
+.row .rank { font: 800 clamp(1.1rem, 2vw, 2.4rem) var(--mono); color: var(--muted); text-align: center; }
+.row .team { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+.row .name { font-size: clamp(1.05rem, 1.9vw, 2.2rem); font-weight: 650; color: var(--heading);
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .bar { display: block; height: 4px; border-radius: 4px; background: rgba(127, 127, 127, .18); overflow: hidden; }
+.row .fill { display: block; height: 100%; width: 0; border-radius: 4px;
+             background: linear-gradient(90deg, var(--accent), #ffa500); }
+/* Only after the first render: on load the bars stand still at their value. */
+.rows.ready .row .fill { transition: width 1.2s cubic-bezier(.2, .8, .2, 1); }
+.row .solves { font: 600 clamp(1rem, 1.6vw, 1.9rem) var(--mono); color: var(--muted); }
+.row .score { font: 800 clamp(1.15rem, 2.2vw, 2.7rem) var(--mono); color: var(--heading); font-variant-numeric: tabular-nums; }
+
+/* Podium. */
+.row.top1 { background: linear-gradient(90deg, rgba(255, 197, 61, .22), rgba(255, 107, 0, .08));
+            border-color: rgba(255, 197, 61, .55); box-shadow: 0 0 32px rgba(255, 197, 61, .18);
+            animation: champion 3.2s ease-in-out infinite; }
+.row.top2 { background: linear-gradient(90deg, rgba(184, 192, 204, .18), rgba(184, 192, 204, .04)); border-color: rgba(184, 192, 204, .45); }
+.row.top3 { background: linear-gradient(90deg, rgba(208, 138, 76, .18), rgba(208, 138, 76, .04)); border-color: rgba(208, 138, 76, .45); }
+.row.top1 .rank { color: var(--gold); text-shadow: 0 0 18px rgba(255, 197, 61, .6); }
+.row.top2 .rank { color: var(--silver); }
+.row.top3 .rank { color: var(--bronze); }
+.row.top1 .rank::before { content: "\265B"; display: block; font-size: .55em; line-height: 1; margin-bottom: .1em;
+                          animation: crown 2.4s ease-in-out infinite; }
+@keyframes champion { 50% { box-shadow: 0 0 52px rgba(255, 197, 61, .32); } }
+@keyframes crown { 50% { transform: translateY(-3px) rotate(-6deg); } }
+
+/* Rank changes: FLIP movement is driven from scoreboard.js; these add the
+   colour that tells the room what happened. */
+.row.went-up { animation: flash-up 2.4s ease-out; }
+.row.went-down { animation: flash-down 2.4s ease-out; }
+.row.top1.went-up { animation: flash-up 2.4s ease-out, champion 3.2s ease-in-out 2.4s infinite; }
+@keyframes flash-up { 0%, 30% { box-shadow: 0 0 0 2px var(--up), 0 0 40px color-mix(in srgb, var(--up) 55%, transparent); } }
+@keyframes flash-down { 0%, 30% { box-shadow: 0 0 0 2px var(--down), 0 0 30px color-mix(in srgb, var(--down) 45%, transparent); } }
+.row.is-new { animation: arrive .9s cubic-bezier(.2, .8, .2, 1); }
+@keyframes arrive { from { opacity: 0; transform: translateX(-40px); } }
+
+/* The chip sits inline after the team name, inside the row: nothing at the
+   edge of the (scrolling, clipped) list can cut it off. */
+.row .line { display: flex; align-items: center; gap: .6em; min-width: 0; }
+.row .line .name { flex: 0 1 auto; min-width: 0; }
+/* Dark text on the bright signal colour: white on green is too faint to
+   read from the back of a room. */
+.chip { flex: none; padding: .12em .5em; border-radius: 999px; font: 900 .95rem var(--mono); line-height: 1.25;
+        color: #0b0d10; animation: chip 7s ease-out forwards; }
+.rows.fit .row .line .chip { font-size: max(.85rem, calc(var(--row-h) * .27)); }
+.chip.up { background: var(--up); box-shadow: 0 0 14px color-mix(in srgb, var(--up) 60%, transparent); }
+.chip.down { background: var(--down); box-shadow: 0 0 14px color-mix(in srgb, var(--down) 50%, transparent); }
+:root[data-theme="light"] .chip { color: #fff; }
+@keyframes chip { 0% { opacity: 0; transform: scale(.4); } 8%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+
+.score.bump { animation: bump .8s ease-out; }
+@keyframes bump { 30% { transform: scale(1.18); color: var(--accent); text-shadow: 0 0 20px rgba(255, 107, 0, .6); } }
+
+/* ---------- activity feed ---------- */
+
+.activity h2 { margin: 0 0 .75rem; font-size: .8rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.feed { list-style: none; margin: 0; padding: 0; }
+.feed li { position: relative; padding: .7rem .8rem .7rem 1rem; margin-bottom: .5rem; border-radius: 10px;
+           background: rgba(127, 127, 127, .07); border-left: 3px solid var(--accent); line-height: 1.35;
+           font-size: clamp(.9rem, 1.05vw, 1.15rem); }
+.feed li strong { color: var(--heading); }
+.feed .chal { color: var(--text); }
+.feed .pts { font: 700 .9em var(--mono); color: var(--accent-text, var(--accent)); margin-left: .25rem; }
+.feed .when { display: block; color: var(--muted); font: .78rem var(--mono); margin-top: .2rem; }
+.feed li.blood-item { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.feed li.fresh { animation: slide-in .9s cubic-bezier(.2, .8, .2, 1); }
+@keyframes slide-in { from { opacity: 0; transform: translateX(60px); } 60% { box-shadow: 0 0 24px rgba(255, 107, 0, .45); } }
+.blood { display: inline-block; margin-left: .35rem; padding: 0 .45rem; border-radius: 4px; font-size: .72em;
+         font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #fff; background: var(--bad); }
+
+/* ---------- first blood announcement ---------- */
+
+.announce { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center;
+            justify-content: center; text-align: center; pointer-events: none;
+            background: radial-gradient(ellipse at center, rgba(0, 0, 0, .55), rgba(0, 0, 0, .85)); }
+.announce[hidden] { display: none; }
+.announce.show { animation: announce 5s ease-in-out forwards; }
+.announce-kicker { font: 900 clamp(3rem, 11vw, 11rem) var(--font); letter-spacing: .04em; text-transform: uppercase;
+                   color: var(--bad); text-shadow: 0 0 40px rgba(255, 60, 60, .7), 0 0 120px rgba(255, 60, 60, .4); }
+.announce-team { font: 800 clamp(1.8rem, 5vw, 5rem) var(--font); color: #fff; margin-top: .5rem; }
+.announce-chal { font: 600 clamp(1.1rem, 2.4vw, 2.4rem) var(--mono); color: #ffd0b0; margin-top: .4rem; }
+.announce.show .announce-kicker { animation: slam .9s cubic-bezier(.2, 1.4, .3, 1); }
+.announce.show .announce-team { animation: rise 1.2s .3s both cubic-bezier(.2, .8, .2, 1); }
+.announce.show .announce-chal { animation: rise 1.2s .5s both cubic-bezier(.2, .8, .2, 1); }
+@keyframes announce { 0% { opacity: 0; } 8%, 85% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes slam { from { transform: scale(2.6); opacity: 0; letter-spacing: .4em; } }
+@keyframes rise { from { transform: translateY(30px); opacity: 0; } }
+
+/* ---------- small screens ---------- */
+
+@media (max-width: 640px) {
+  .ranking-head, .row { grid-template-columns: 2.4rem minmax(0, 1fr) 2.8rem 4.2rem; gap: .4rem; }
+  .board-top .meta { gap: .6rem; }
+  .updated { display: none; }
+}
+
+/* ---------- reduced motion: everything holds still ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .glow, .floor, .live.is-live .dot, .row.top1, .row.top1 .rank::before, .row.went-up, .row.went-down,
+  .row.is-new, .chip, .score.bump, .feed li.fresh, .announce.show, .announce.show * { animation: none !important; }
+  .rows.ready .row .fill { transition: none; }
+}
+
+
+
+/* ---------- fitted rows (projector) ----------
+   With .fit, everything in a row scales with --row-h, which scoreboard.js
+   computes from the space available and the number of teams. */
+.rows.fit .row { min-height: 0; height: var(--row-h); margin-bottom: var(--row-gap, .5rem); }
+.rows.fit .row .rank { font-size: calc(var(--row-h) * .42); }
+.rows.fit .row .name { font-size: calc(var(--row-h) * .40); }
+.rows.fit .row .solves { font-size: calc(var(--row-h) * .32); }
+.rows.fit .row .score { font-size: calc(var(--row-h) * .44); }
+.rows.fit .row .bar { height: max(3px, calc(var(--row-h) * .06)); }
+.rows.fit .row.top1 .rank::before { font-size: .5em; margin-bottom: 0; }
+.ranking-foot { display: flex; justify-content: center; gap: .5rem; padding-top: .4rem; min-height: 1.4rem;
+                color: var(--muted); font: 600 .85rem var(--mono); }
+.ranking-foot .pip { width: .55rem; height: .55rem; border-radius: 50%; background: var(--card-border);
+                     align-self: center; transition: background .3s; }
+.ranking-foot .pip.on { background: var(--accent); }
+.feed li.off { display: none; }
+.activity .feed { position: relative; }
+
+/* Must come last: it overrides the flowing layout above on projector-sized screens. */
+/* Projector layout: exactly one screen, nothing ever scrolls or gets cut.
+   The ranking sizes its rows to fit (scoreboard.js sets --row-h) and pages
+   through the teams if even small rows would not fit. Below 1000 px width
+   (phones, tablets) the page simply flows and scrolls instead. */
+@media (min-width: 1001px) {
+  body.board { height: 100vh; overflow: hidden; }
+  body.board main { height: 100vh; display: flex; flex-direction: column; }
+  .board-app { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  /* minmax(0, 1fr): the row is as tall as the screen allows, never as tall
+     as its content, so the measured space is the real space. */
+  .board-grid { flex: 1; min-height: 0; align-items: stretch; grid-template-rows: minmax(0, 1fr); }
+  .ranking, .activity { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .ranking .rows { flex: 1; min-height: 0; overflow: hidden; }
+  .activity .feed { flex: 1; min-height: 0; overflow: hidden; }
+}
+.ranking-foot { margin-top: auto; }
+
+/* First blood bonus: the rule next to the feed title, the extra on each entry. */
+.bonus-rule { margin-left: .6rem; padding: .1rem .55rem; border-radius: 999px; font-size: .95em; letter-spacing: .06em;
+              color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 55%, transparent); }
+.bonus-rule[hidden] { display: none; }
+.feed .bonus { font: 700 .85em var(--mono); color: var(--bad); margin-left: .35rem; white-space: nowrap; }

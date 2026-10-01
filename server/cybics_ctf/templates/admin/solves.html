@@ -1,0 +1,65 @@
+{% extends "admin/layout.html" %}
+{% block title %}Solves &middot; {{ event.name }}{% endblock %}
+{% block content %}
+<h1>Solves &amp; audit</h1>
+<div class="panel">
+  <form method="get" class="row">
+    <label for="team-filter">Team</label>
+    <select id="team-filter" name="team">
+      <option value="">all teams</option>
+      {% for t in teams %}<option value="{{ t.id }}" {{ 'selected' if t.id == team_id }}>{{ t.name }}</option>{% endfor %}
+    </select>
+    <button class="secondary" type="submit">Filter</button>
+    <span class="muted">Export:</span>
+    <a href="{{ url_for('admin.export', event_id=event.id, kind='solves') }}">solves.csv</a>
+    <a href="{{ url_for('admin.export', event_id=event.id, kind='submissions') }}">submissions.csv</a>
+  </form>
+</div>
+<div class="panel">
+  <h2>Suspicious activity</h2>
+  <p class="muted">A CybICS landing page checks flags locally and only forwards correct ones, so a wrong flag here
+     means someone is talking to the API directly. Wrong team passwords on enrolment can be a typo or someone
+     guessing; many in a row are worth a look. Unknown challenge ids are not listed: they also happen
+     honestly when an instance runs a CybICS version with challenges this event does not have.</p>
+  <table>
+    <thead><tr><th>Time</th><th>Team</th><th>What</th><th>Challenge</th><th>Address</th><th>Instance</th></tr></thead>
+    <tbody>
+    {% for s in suspicious %}
+      <tr><td class="muted">{{ s.received_at|time }}</td>
+          <td>{{ s.team_name or '-' }}{% if not s.team_id %} <span class="badge">deleted</span>{% endif %}</td>
+          <td><span class="badge warn">{{ 'wrong flag' if s.result == 'invalid_flag' else 'wrong team password' }}</span></td>
+          <td class="mono">{{ s.challenge_key if s.result == 'invalid_flag' else '-' }}</td>
+          <td class="mono">{{ s.remote_addr }}</td><td class="mono muted">{{ (s.instance_id or '-')[:8] }}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">Nothing suspicious so far.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="panel">
+  <h2>All solves</h2>
+  <p class="muted">Voiding a solve takes its points away but keeps it on the team's record, so the instance does not
+     report it again. It can be restored at any time.</p>
+  <table>
+    <thead><tr><th>Received</th><th>Team</th><th>Challenge</th><th class="num">Points</th><th>From</th>
+               <th title="As reported by the instance; it controls that clock">Instance clock</th><th></th></tr></thead>
+    <tbody>
+    {% for s in solves %}
+      <tr class="{{ 'muted' if s.voided or s.banned }}">
+        <td>{{ s.received_at|time }}</td>
+        <td>{{ s.team }}{% if s.banned %} <span class="badge bad">disqualified</span>{% endif %}</td>
+        <td>{{ s.title }}{% if s.first_blood %} <span class="blood">first blood</span>{% endif %}
+            {% if s.voided %} <span class="badge warn">voided</span>{% endif %}</td>
+        <td class="num">{{ s.points }}</td><td>{{ s.kind or 'deleted instance' }}</td>
+        <td class="muted">{{ s.client_time|time }}</td>
+        <td><form class="inline" method="post" action="{{ url_for('admin.solve_action', event_id=event.id, solve_id=s.id, action='restore' if s.voided else 'void') }}"
+                  data-confirm="{{ ('Restore' if s.voided else 'Void') ~ ' the solve of ' ~ s.title ~ ' by ' ~ s.team ~ '?' }}">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <button class="{{ 'secondary' if s.voided else 'danger' }}" type="submit">{{ 'Restore' if s.voided else 'Void' }}</button></form></td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No solves{{ ' on this page' if page else ' yet' }}.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  <div class="row pager">
+    {% if page %}<a href="{{ url_for('admin.solves', event_id=event.id, team=team_id, page=page - 1) }}">&larr; newer</a>{% endif %}
+    {% if has_more %}<a href="{{ url_for('admin.solves', event_id=event.id, team=team_id, page=page + 1) }}">older &rarr;</a>{% endif %}
+  </div>
+</div>
+{% endblock %}

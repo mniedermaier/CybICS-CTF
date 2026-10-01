@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block scripts %}<script src="{{ url_for('static', filename='admin.js') }}"></script>{% endblock %}
+{% block nav %}
+  <a href="{{ url_for('admin.events') }}">Events</a>
+  {% if event %}
+  {% set ep = request.endpoint %}
+  <a class="{{ 'active' if ep == 'admin.event' }}" href="{{ url_for('admin.event', event_id=event.id) }}">{{ event.name }}</a>
+  <a class="{{ 'active' if ep == 'admin.challenges' }}" href="{{ url_for('admin.challenges', event_id=event.id) }}">Challenges</a>
+  <a class="{{ 'active' if ep == 'admin.teams' }}" href="{{ url_for('admin.teams', event_id=event.id) }}">Teams</a>
+  <a class="{{ 'active' if ep == 'admin.instances' }}" href="{{ url_for('admin.instances', event_id=event.id) }}">Instances</a>
+  <a class="{{ 'active' if ep == 'admin.solves' }}" href="{{ url_for('admin.solves', event_id=event.id) }}">Solves &amp; audit</a>
+  <a class="{{ 'active' if ep == 'admin.admin_log' }}" href="{{ url_for('admin.admin_log', event_id=event.id) }}">Log</a>
+  {% if event.scoreboard_public %}<a href="{{ url_for('public.scoreboard', slug=event.slug) }}" target="_blank" rel="noopener">Scoreboard &#8599;</a>{% endif %}
+  {% endif %}
+{% endblock %}

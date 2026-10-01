@@ -1,0 +1,30 @@
+name: pytest
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per workflow per ref; pull request runs are cancelled by a newer
+  # push, runs on main are not.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pytest:
+    name: Lint and tests (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r server/requirements-dev.txt
+      - run: ruff check .
+      - run: pytest --cov=cybics_ctf --cov=cybics_ctf_client --cov-report=term --cov-fail-under=90
+        working-directory: server

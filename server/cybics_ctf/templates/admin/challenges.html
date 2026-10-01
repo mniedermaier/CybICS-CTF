@@ -1,0 +1,37 @@
+{% extends "admin/layout.html" %}
+{% block title %}Challenges &middot; {{ event.name }}{% endblock %}
+{% block content %}
+<h1>Challenges</h1>
+<div class="panel">
+  <h2>Import catalog</h2>
+  <p class="muted">Upload <code>software/landing/ctf_config.json</code> from the CybICS version the participants run.
+     Re-importing updates titles, flags and types by challenge id and keeps existing solves. Points you changed
+     here and challenges you switched off stay as you set them. Challenges missing from the new file stop
+     counting but keep their solves. Only a hash of each flag is stored.</p>
+  <form method="post" enctype="multipart/form-data" action="{{ url_for('admin.catalog', event_id=event.id) }}" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="file" name="catalog" accept="application/json,.json" aria-label="ctf_config.json" required>
+    <button type="submit">Import</button>
+  </form>
+</div>
+<div class="panel">
+  <table>
+    <thead><tr><th>Id</th><th>Title</th><th>Category</th><th>Type</th><th class="num">Solves</th><th>Points / enabled</th></tr></thead>
+    <tbody>
+    {% for c in challenges %}
+      <tr class="{{ '' if c.enabled and c.in_catalog else 'muted' }}">
+        <td class="mono">{{ c.key }}{% if not c.in_catalog %} <span class="badge warn" title="Not in the last imported ctf_config.json">removed</span>{% endif %}
+            {% if c.points_custom %} <span class="badge" title="Points changed here; a re-import keeps them">custom points</span>{% endif %}</td><td>{{ c.title }}</td><td>{{ c.category }}</td><td>{{ c.ctype }}</td>
+        <td class="num">{{ solve_counts.get(c.id, 0) }}</td>
+        <td><form method="post" action="{{ url_for('admin.challenge_update', event_id=event.id, challenge_id=c.id) }}" class="row">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="number" name="points" value="{{ c.points }}" min="0" aria-label="Points for {{ c.key }}" required>
+          <label class="check"><input type="checkbox" name="enabled" {{ 'checked' if c.enabled }}> enabled</label>
+          <button class="secondary" type="submit">Save</button></form></td></tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">No challenges imported yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
