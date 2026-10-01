@@ -1,0 +1,20 @@
+target-version = "py39"   # the client must run on 3.9; the server on 3.12
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "B", "I", "UP", "S", "BLE"]
+ignore = [
+    "S101",   # assert is how pytest works
+    "S608",   # SQL is built from constant fragments only; values are always bound
+    "UP",     # keep 3.9-compatible spelling in the client
+]
+
+[lint.per-file-ignores]
+"server/tests/*" = ["S105", "S106", "S107", "S311", "BLE001", "B017"]
+# The client catches everything on purpose: it runs inside CybICS' landing
+# page and must never take a local submission or the sender thread down
+# (see the "client never takes landing down" invariant in CLAUDE.md).
+"client/cybics_ctf_client.py" = ["BLE001", "S110"]
+
+[lint.isort]
+known-first-party = ["cybics_ctf", "cybics_ctf_client", "conftest"]

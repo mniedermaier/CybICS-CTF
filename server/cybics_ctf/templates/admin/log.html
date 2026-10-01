@@ -1,0 +1,19 @@
+{% extends "admin/layout.html" %}
+{% block title %}Log &middot; {{ event.name }}{% endblock %}
+{% block content %}
+<h1>Organiser log</h1>
+<div class="panel">
+  <p class="muted">Every organiser action on this event, from the web UI and the command line, plus logins.
+     Kept in the database, so it survives restarts and container updates.
+     <a href="{{ url_for('admin.export', event_id=event.id, kind='log') }}">Export as CSV</a></p>
+  <table>
+    <thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for e in entries %}
+      <tr><td class="muted">{{ e.created_at|time }}</td><td class="mono">{{ e.actor }}</td>
+          <td>{{ e.action }}</td><td class="mono muted">{{ e.details }}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">Nothing logged yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

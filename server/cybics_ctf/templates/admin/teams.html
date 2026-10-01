@@ -1,0 +1,63 @@
+{% extends "admin/layout.html" %}
+{% block title %}Teams &middot; {{ event.name }}{% endblock %}
+{% block content %}
+<h1>Teams</h1>
+<div class="panel">
+  <table>
+    <thead><tr><th>Team</th><th class="num">Rank</th><th class="num">Points</th><th class="num">Instances</th>
+               <th class="num" title="Wrong flags. An unmodified CybICS never sends these.">Wrong flags</th>
+               <th class="num" title="Enrolment attempts with a wrong team password">Wrong passwords</th>
+               <th>Created</th><th></th></tr></thead>
+    <tbody>
+    {% for t in teams %}
+      {% set s = scores.get(t.id) %}
+      <tr><td><input type="checkbox" name="team_id" value="{{ t.id }}" form="bulk" aria-label="Select {{ t.name }}">
+          {{ t.name }} {% if t.banned %}<span class="badge bad">disqualified</span>{% endif %}</td>
+          <td class="num">{{ s.rank if s else '-' }}</td><td class="num">{{ s.score if s else 0 }}</td>
+          <td class="num">{{ t.instances }}</td>
+          <td class="num">{% if t.bad_submissions %}<span class="badge warn">{{ t.bad_submissions }}</span>{% else %}0{% endif %}</td>
+          <td class="num">{% if t.failed_enrolments %}<span class="badge warn">{{ t.failed_enrolments }}</span>{% else %}0{% endif %}</td>
+          <td class="muted">{{ t.created_at|ago }}</td>
+          <td><div class="row">
+            <form class="inline" method="post" action="{{ url_for('admin.team_action', event_id=event.id, team_id=t.id, action='unban' if t.banned else 'ban') }}"
+                  data-confirm="{{ ('Reinstate ' if t.banned else 'Disqualify ') ~ t.name ~ '?' }}">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <button class="secondary" type="submit">{{ 'Reinstate' if t.banned else 'Disqualify' }}</button></form>
+            <details class="manage"><summary>more</summary>
+            <form class="row" method="post" action="{{ url_for('admin.team_action', event_id=event.id, team_id=t.id, action='password') }}">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="password" name="password" placeholder="new password" aria-label="New password for {{ t.name }}" minlength="8" maxlength="128" required size="12">
+              <button class="secondary" type="submit">Set</button></form>
+            <form class="row" method="post" action="{{ url_for('admin.team_action', event_id=event.id, team_id=t.id, action='delete') }}">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="text" name="confirm" placeholder="type name to delete" aria-label="Type {{ t.name }} to confirm deletion" required size="14">
+              <button class="danger" type="submit">Delete</button></form>
+            </details>
+          </div></td></tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">No teams yet. They appear when the first CybICS enrols, or create them here.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="panel">
+  <h2>Selected teams</h2>
+  <form id="bulk" method="post" action="{{ url_for('admin.teams_bulk', event_id=event.id) }}" class="row"
+        data-confirm="Apply this to all selected teams?">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button class="secondary" type="submit" name="action" value="ban">Disqualify selected</button>
+    <input type="text" name="confirm" placeholder="type DELETE to delete" aria-label="Type DELETE to delete the selected teams" size="18">
+    <button class="danger" type="submit" name="action" value="delete">Delete selected</button>
+  </form>
+</div>
+<div class="panel">
+  <h2>Create team</h2>
+  <p class="muted">Needed when self-registration is switched off in the event settings. Hand the name and password to the team.</p>
+  <form method="post" action="{{ url_for('admin.team_create', event_id=event.id) }}" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="text" name="name" placeholder="Team name" aria-label="Team name" required>
+    <input type="password" name="password" placeholder="Team password" aria-label="Team password" minlength="8" maxlength="128" required>
+    <button type="submit">Create</button>
+  </form>
+</div>
+{% endblock %}

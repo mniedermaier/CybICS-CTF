@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero">
+  <img src="{{ url_for('static', filename='img/cybics-logo.png') }}" alt="CybICS" width="420" height="86">
+  <p>{{ server_name }} &middot; central CTF server for the CybICS ICS security training platform</p>
+</div>
+<div class="panel">
+  <h2>Scoreboards</h2>
+  {% if events %}
+  <table>
+    <thead><tr><th>Event</th><th>State</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+      <tr><td><a href="{{ url_for('public.scoreboard', slug=e.slug) }}">{{ e.name }}</a></td>
+          <td><span class="badge state-{{ e.state }}">{{ e.state }}</span></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No public event is running right now.</p>
+  {% endif %}
+</div>
+<div class="panel">
+  <h2>Joining with your CybICS</h2>
+  <p>Open your CybICS landing page, go to <strong>Settings &rarr; Central CTF server</strong>,
+     and enter this server's address, the join code from your organiser, a team name and a team password.
+     Teammates join the same team by entering the same name and password on their own CybICS.</p>
+  <p class="muted">Taking part is optional. Your CybICS keeps working exactly the same without it.</p>
+</div>
+{% endblock %}
