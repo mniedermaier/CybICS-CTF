@@ -181,7 +181,7 @@ def test_stale_401_does_not_disable_a_new_enrolment(server, event, tmp_path, app
     assert client.sync_once() is True
 
 
-def test_unknown_result_values_are_final(server, event, tmp_path, monkeypatch):
+def test_unknown_result_values_are_held_like_invalid_flag(server, event, tmp_path, monkeypatch):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
     client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
@@ -197,7 +197,41 @@ def test_unknown_result_values_are_final(server, event, tmp_path, monkeypatch):
     client.sync_once()
     snap = client.snapshot()
     assert snap["pending"] == 0
-    assert "physical_process" in snap["rejected"]
+    assert "physical_process" not in snap["rejected"]
+    assert "physical_process" in client.state["held"]
+
+
+def test_a_non_string_result_does_not_wedge_the_outbox(server, event, tmp_path, monkeypatch):
+    landing = Landing()
+    client = landing.client(tmp_path / "s.json")
+    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    landing.solve(client, "physical_process")
+    real_request = client._request
+
+    def odd_server(method, path, **kw):
+        if path == "/solves":
+            return 200, {"result": ["accepted"]}
+        return real_request(method, path, **kw)
+
+    monkeypatch.setattr(client, "_request", odd_server)
+    client.sync_once()
+    assert client.snapshot()["pending"] == 0
+
+
+def test_an_unwritable_state_file_is_a_client_error(server, event, tmp_path, monkeypatch):
+    client = Landing().client(tmp_path / "s.json")
+
+    def full_disk():
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(client, "_save", full_disk)
+    with pytest.raises(CTFClientError) as exc:
+        client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    assert exc.value.code == "state_unwritable"
+    with pytest.raises(CTFClientError) as exc:
+        client.leave()
+    assert exc.value.code == "state_unwritable"
+    assert client.snapshot()["enabled"] is False
 
 
 def test_unknown_challenge_is_retried_after_catalog_change(server, event, tmp_path, app):

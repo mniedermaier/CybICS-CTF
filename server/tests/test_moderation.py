@@ -1021,3 +1021,31 @@ def test_error_redirect_keeps_the_page_query(admin, event):
     resp = admin.post(f"/admin/events/{event['id']}/challenges/1", data={**CSRF, "points": "x"},
                       headers={"Referer": f"http://localhost/admin/events/{event['id']}/instances?all=1"})
     assert resp.headers["Location"] == f"/admin/events/{event['id']}/instances?all=1"
+
+
+def test_query_keys_cannot_clash_with_url_building(client):
+    from conftest import ADMIN_PASSWORD
+    with client.session_transaction() as sess:
+        sess["csrf"] = "c"
+    resp = client.post("/admin/login?next=/admin/%3Fendpoint%3D1%26_external%3D1",
+                       data={"password": ADMIN_PASSWORD, "csrf": "c"})
+    assert resp.status_code == 302
+    assert resp.headers["Location"].startswith("/admin/"), resp.headers["Location"]
+
+
+def test_a_non_ascii_csrf_token_is_a_400(client):
+    with client.session_transaction() as sess:
+        sess["csrf"] = "known"
+    assert client.post("/admin/login", data={"password": "x", "csrf": "\u00e9"}).status_code == 400
+
+
+def test_bulk_ignores_non_ascii_digits(admin, event):
+    resp = admin.post(f"/admin/events/{event['id']}/teams/bulk",
+                      data={**CSRF, "action": "ban", "team_id": ["\u00b2", "\u0663"]})
+    assert resp.status_code == 302
+
+
+def test_csv_leaves_empty_cells_empty(admin, event):
+    admin.post(f"/admin/events/{event['id']}/announcements", data={**CSRF, "message": "Hello"})
+    text = admin.get(f"/admin/events/{event['id']}/export/log.csv").data.decode()
+    assert ",'\r\n" not in text and ",'\n" not in text
