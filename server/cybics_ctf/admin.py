@@ -132,9 +132,11 @@ def _safe_next(target):
         return fallback
     if not endpoint.startswith("admin.") or endpoint in ("admin.login", "admin.login_link_page"):
         return fallback
-    # url_for() reads "_external", "_scheme" and friends as options, so those never pass.
-    query = {k: v for k, v in parse_qsl(parts.query) if k not in values and not k.startswith("_")}
-    return url_for(endpoint, **values, **query)
+    # Built from a dict, not url_for(**kwargs): a query key such as "endpoint"
+    # would otherwise be read as one of url_for's own arguments. No admin page
+    # uses "_" keys, so those are dropped rather than carried along.
+    query = {k: v for k, v in parse_qsl(parts.query) if not k.startswith("_")}
+    return current_app.create_url_adapter(request).build(endpoint, {**query, **values})
 
 
 def _back_here():
@@ -399,7 +401,7 @@ def teams_bulk(event_id):
     """Disqualify or delete several teams at once, e.g. after a junk-team flood."""
     _event_or_404(event_id)
     db = get_db()
-    ids = [int(t) for t in request.form.getlist("team_id") if t.isdigit()]
+    ids = [int(t) for t in request.form.getlist("team_id") if t.isdecimal() and t.isascii()]
     teams = db.execute(f"""SELECT id, name FROM teams WHERE event_id = ?
                            AND id IN ({",".join("?" * len(ids)) or "NULL"})""", (event_id, *ids)).fetchall()
     action = request.form.get("action")
@@ -544,7 +546,7 @@ def _csv_response(filename, header, rows):
     writer.writerow(header)
     for row in rows:
         # Neutralise spreadsheet formulas: team names come from participants.
-        writer.writerow(["'" + v if isinstance(v, str) and v[:1] in "=+-@\t\r" else v for v in row])
+        writer.writerow(["'" + v if isinstance(v, str) and v and v[0] in "=+-@\t\r" else v for v in row])
     return Response(out.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 

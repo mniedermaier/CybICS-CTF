@@ -1,6 +1,8 @@
 """The instance-facing API: enrolment, heartbeat, solves, scoreboard."""
 import json
 
+import pytest
+
 from conftest import CATALOG, FLAGS, auth, enroll
 from cybics_ctf import ctf
 from cybics_ctf.db import get_db
@@ -263,3 +265,53 @@ def test_oversized_status_is_discarded_not_truncated(client, enrolled, app):
     with app.app_context():
         row = get_db().execute("SELECT status_json FROM instances").fetchone()
     assert "error" in json.loads(row["status_json"])
+
+
+def test_lone_surrogates_are_a_400_not_a_500(client, event, enrolled):
+    # JSON allows "\ud800"; UTF-8, hashing and SQLite do not.
+    bad = "\ud800"
+    assert solve(client, enrolled["token"], "physical_process", flag=bad).status_code == 400
+    assert solve(client, enrolled["token"], bad, flag="x").status_code == 400
+    for field in ("join_code", "team_name", "team_password"):
+        body = {"join_code": event["join_code"], "team_name": "Blue Team", "team_password": "secret-12",
+                "instance": {"kind": "virtual"}, field: bad}
+        assert client.post("/api/v1/enroll", json=body).status_code in (400, 404), field
+    resp = enroll(client, event, team="Blue Team", hostname=bad, mode=bad)
+    assert resp.status_code == 201
+    resp = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]),
+                       json={"status": {"mode": bad, "cybics_version": bad, bad: bad}})
+    assert resp.status_code == 200
+
+
+def test_a_password_change_during_enrolment_is_retried_not_hashed_under_the_lock(
+        client, event, enrolled, app, monkeypatch):
+    real_verify = ctf.verify_password
+
+    def verify_then_change(stored, password):
+        ok = real_verify(stored, password)
+        db = get_db()
+        db.execute("UPDATE teams SET password_hash = 'changed' WHERE name = 'Red Team'")
+        db.commit()
+        monkeypatch.setattr(ctf, "verify_password", lambda *a: pytest.fail("hashed under the lock"))
+        return ok
+
+    monkeypatch.setattr(ctf, "verify_password", verify_then_change)
+    resp = enroll(client, event)
+    assert resp.status_code == 503
+    assert resp.get_json()["error"]["code"] == "busy"
+
+
+def test_a_board_computed_before_an_invalidation_is_not_cached(app, event, monkeypatch):
+    from cybics_ctf import api
+    real_board = ctf.scoreboard
+
+    def solve_lands_meanwhile(db, event_id):
+        board = real_board(db, event_id)
+        api.invalidate_board()
+        return board
+
+    monkeypatch.setattr(ctf, "scoreboard", solve_lands_meanwhile)
+    api.invalidate_board()
+    with app.app_context():
+        api.public_board(get_db(), event)
+    assert api._board_cache == {}

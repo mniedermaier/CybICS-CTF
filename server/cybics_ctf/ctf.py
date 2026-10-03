@@ -83,7 +83,23 @@ def _text(value, field, required=True):
         return ""
     if not isinstance(value, str):
         raise CTFError("invalid_input", f"{field} must be a string.")
+    if not _encodable(value):
+        # JSON allows lone surrogates ("\ud800"); UTF-8, hashing and SQLite do not.
+        raise CTFError("invalid_input", f"{field} must be valid Unicode.")
     return value
+
+
+def _encodable(value):
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _scrub(value):
+    """Lone surrogates in an informational string become "?" instead of a 500."""
+    return value if _encodable(value) else value.encode("utf-8", "replace").decode("utf-8")
 
 
 # Instance clocks are informational, but they end up in the admin UI; keep
@@ -374,7 +390,7 @@ def _validate_instance(info):
 
     def short(field, limit=64):
         value = info.get(field)
-        return str(value)[:limit] if value not in (None, "") else None
+        return _scrub(str(value))[:limit] if value not in (None, "") else None
 
     return {"kind": kind, "device_uid": device_uid, "hostname": short("hostname"),
             "cybics_version": short("cybics_version", 32), "mode": short("mode", 32)}
@@ -452,16 +468,16 @@ def enroll(db, join_code, team_name, team_password, instance_info, remote_addr):
             _check_lookalike(db, event["id"], team_name)   # again under the lock: two at once
             cur = db.execute(
                 "INSERT INTO teams (event_id, name, password_hash, created_at) VALUES (?, ?, ?, ?)",
-                (event["id"], team_name, new_hash or hash_password(team_password), now()))
+                (event["id"], team_name, new_hash, now()))
             team = db.execute("SELECT * FROM teams WHERE id = ?", (cur.lastrowid,)).fetchone()
         elif existing is None:
             # Created by someone else between the check and the lock: that
             # path skipped the checks for joining. Let the caller retry.
             raise CTFError("busy", "The team was just created by someone else. Try again.", 503)
         elif team["password_hash"] != existing["password_hash"]:
-            # Created or changed between the check and the lock (rare): verify again.
-            if not verify_password(team["password_hash"], team_password):
-                raise wrong_password(team)
+            # Password changed between the check and the lock (rare). Verifying
+            # again would hash under the write lock; let the caller retry.
+            raise CTFError("busy", "The team changed meanwhile. Try again.", 503)
         if team["banned"]:
             raise CTFError("team_banned", "This team has been disqualified.", 403)
 
@@ -549,7 +565,7 @@ def record_heartbeat(db, instance_id, status, remote_addr):
 
 
 def _opt_str(value, limit):
-    return str(value)[:limit] if value not in (None, "") else None
+    return _scrub(str(value))[:limit] if value not in (None, "") else None
 
 
 def revoke_instance(db, instance_id):

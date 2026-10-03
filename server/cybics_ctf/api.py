@@ -90,6 +90,10 @@ def info():
                     "version": __version__, "api_version": API_VERSION, "server_time": now()})
 
 
+def _usable(value):
+    return isinstance(value, str) and ctf._encodable(value)
+
+
 @bp.post("/enroll")
 def enroll():
     # Shared addresses: a whole classroom, the projector and the organiser
@@ -111,8 +115,9 @@ def enroll():
     try:
         data = _json_body()
         code, name = data.get("join_code"), data.get("team_name")
-        event_row = ctf.get_event_by_join_code(db, code) if isinstance(code, str) and code.strip() else None
-        norm_name = unicodedata.normalize("NFC", " ".join(name.split())) if isinstance(name, str) else ""
+        # Only well-formed strings reach SQLite here; enroll() turns the rest into a 400.
+        event_row = ctf.get_event_by_join_code(db, code) if _usable(code) and code.strip() else None
+        norm_name = unicodedata.normalize("NFC", " ".join(name.split())) if _usable(name) else ""
         # New teams per address: counted only when a team is actually created.
         creating = event_row is not None and bool(norm_name) and not db.execute(
             "SELECT 1 FROM teams WHERE event_id = ? AND name = ?", (event_row["id"], norm_name)).fetchone()
@@ -236,12 +241,15 @@ def leave():
 # while the cache makes any poll rate cheap. Heartbeats read it too.
 _board_cache = {}
 _board_lock = threading.Lock()
+_board_generation = 0   # bumped by invalidate_board(); a board computed before that is not stored
 BOARD_TTL = 2.0
 
 
 def invalidate_board():
     """Call after anything that changes scores or ranks, so nobody sees a stale board."""
+    global _board_generation
     with _board_lock:
+        _board_generation += 1
         _board_cache.clear()
 
 
@@ -252,9 +260,12 @@ def public_board(db, event):
         hit = _board_cache.get(key)
         if hit and time.monotonic() - hit[0] < BOARD_TTL:
             return hit[1]
+        generation = _board_generation
     data = (ctf.scoreboard(db, event["id"]),
             [dict(r) for r in ctf.recent_solves(db, event["id"], 15)])
     with _board_lock:
+        if generation != _board_generation:
+            return data   # invalidated while computing: this one may already be stale
         if len(_board_cache) > 256:
             _board_cache.clear()
         _board_cache[key] = (time.monotonic(), data)

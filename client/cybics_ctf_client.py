@@ -49,9 +49,11 @@ TIMEOUT = 8
 ENROLL_TIMEOUT = 30
 
 # Results that mean "counted, or already on record". Every other result is
-# final too (the solve leaves the outbox), but the solve is not reported again;
-# see _settle(). Unknown future result values are treated the same way.
+# final too (the solve leaves the outbox); see _settle() for which ones are
+# held and retried later. Unknown future result values are treated like
+# invalid_flag, as docs/API.md requires.
 DONE_RESULTS = {"accepted", "duplicate"}
+KNOWN_RESULTS = DONE_RESULTS | {"invalid_flag", "unknown_challenge", "event_not_running"}
 
 
 class CTFClientError(Exception):
@@ -141,6 +143,13 @@ class CTFClient:
         except (OSError, ValueError):
             pass
         return state
+
+    def _save_or_raise(self):
+        """_save() for user actions: a full or read-only disk becomes a CTFClientError."""
+        try:
+            self._save()
+        except OSError as exc:
+            raise CTFClientError("state_unwritable", f"Cannot save the central CTF settings: {exc}") from None
 
     def _save(self):
         directory = os.path.dirname(os.path.abspath(self.state_path))
@@ -268,7 +277,7 @@ class CTFClient:
                 "team": resp.get("team"), "event": resp["event"],
                 "heartbeat_interval": _interval(resp.get("heartbeat_interval")),
             })
-            self._save()
+            self._save_or_raise()
         self._wake.set()
         return resp
 
@@ -286,12 +295,19 @@ class CTFClient:
             self.state.update(kept)
             self.state.update({"server_url": url, "event": event, "team": team,
                                "left_local": sorted(set(self._safe_local_solves()))})
-            self._save()
+            try:
+                self._save_or_raise()
+            except CTFClientError as exc:
+                unsaved = exc
+            else:
+                unsaved = None
         if token and url:
             try:
                 self._request("DELETE", "/instance", token=token, server_url=url)
             except CTFClientError:
                 pass
+        if unsaved:
+            raise unsaved
 
     def report_solve(self, challenge_id, flag):
         """
@@ -340,12 +356,17 @@ class CTFClient:
         """True if `token` still belongs to the active enrolment (call with the lock held)."""
         return self.state["enabled"] and self.state["token"] == token
 
-    def _settle(self, item, result):
-        """Take a solve out of the outbox for good (call with the lock held)."""
+    def _settle(self, item, result, refused=False):
+        """
+        Take a solve out of the outbox for good (call with the lock held).
+        `refused` means `result` is the error code of a 4xx, not a `result` value.
+        """
         cid = item["challenge_id"]
         self.state["outbox"] = [i for i in self.state["outbox"] if i["challenge_id"] != cid]
         if result in DONE_RESULTS:
             return
+        if not refused and result not in KNOWN_RESULTS:
+            result = "invalid_flag"
         if result == "event_not_running" and item.get("while_running"):
             # Solved while the event ran, but the report only arrived after the
             # organiser paused or finished (the outbox may back off for
@@ -361,8 +382,8 @@ class CTFClient:
             # changes. A cheater gains nothing: every retry is audited.
             self.state["held"][cid] = self.state["catalog_version"]
         else:
-            # event_not_running (solved before the start or in a pause), a
-            # client error, or a result this client does not know.
+            # event_not_running (solved before the start or in a pause), or
+            # a client error.
             self.state["rejected"] = sorted(set(self.state["rejected"]) | {cid})
 
     def _flush_outbox(self):
@@ -372,7 +393,9 @@ class CTFClient:
         for item in pending:
             try:
                 _, resp = self._request("POST", "/solves", body=item, token=token)
-                result = resp.get("result") or "unknown_result"
+                result, refused = resp.get("result"), False
+                if not isinstance(result, str) or not result:
+                    result = "unknown_result"   # a list would break the set lookups in _settle()
             except CTFClientError as exc:
                 # 401/403/429 concern the instance, not this solve; 5xx and
                 # transport errors are transient; and a 4xx that is not this
@@ -381,11 +404,11 @@ class CTFClient:
                 if (exc.status is None or exc.status >= 500 or exc.status in (401, 403, 429)
                         or not exc.from_server):
                     raise
-                result = exc.code   # this server refused this solve: it never will accept it
+                result, refused = exc.code, True   # this server refused this solve: it never will accept it
             with self._lock:
                 if not self._current(token):
                     return   # the user left or re-enrolled meanwhile
-                self._settle(item, result)
+                self._settle(item, result, refused)
                 self._save()
 
     def _heartbeat(self):

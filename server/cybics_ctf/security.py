@@ -291,5 +291,7 @@ def csrf_token():
 def check_csrf():
     """Every state-changing admin form posts the session's CSRF token."""
     sent = request.form.get("csrf", "")
-    if not sent or not hmac.compare_digest(sent, session.get("csrf", "")):
+    # As bytes: compare_digest raises TypeError on non-ASCII str.
+    if not sent or not hmac.compare_digest(sent.encode("utf-8", "replace"),
+                                           str(session.get("csrf", "")).encode("utf-8", "replace")):
         abort(400, "CSRF token missing or invalid")

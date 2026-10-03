@@ -152,8 +152,9 @@ which is also final for that solve.
 ```
 
 A valid request always gets `200`, and every `result` takes the item out of the client's outbox. A
-client must treat a `result` value it does not know like `invalid_flag`: final, and not to be
-reported again. New values may be added in v1.
+client must treat a `result` value it does not know like `invalid_flag`: it leaves the outbox and is
+not reported again until `catalog_version` changes (see below). New values may be added in v1, and
+each must be safe to handle that way.
 
 | `result` | Meaning |
 |---|---|
