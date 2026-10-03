@@ -8,12 +8,12 @@
 <div align="center">
 
 [![License](https://img.shields.io/badge/license-MIT%20License-32c955)](/LICENSE)
-[![pytest](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/pytest.yml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/pytest.yml)
-[![client](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/client.yml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/client.yml)
-[![compose](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/compose.yml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/compose.yml)
-[![CodeQL](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/codeql.yml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/codeql.yml)
-[![TruffleHog](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/trufflehog.yaml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/trufflehog.yaml)
-[![Raspberry Pi image](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/rpi-image.yml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/rpi-image.yml)
+[![pytest](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/pytest.yml/badge.svg)](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/pytest.yml)
+[![client](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/client.yml/badge.svg)](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/client.yml)
+[![compose](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/compose.yml/badge.svg)](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/compose.yml)
+[![CodeQL](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/codeql.yml/badge.svg)](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/codeql.yml)
+[![TruffleHog](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/trufflehog.yaml/badge.svg)](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/trufflehog.yaml)
+[![Raspberry Pi image](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/rpi-image.yml/badge.svg)](https://github.com/mniedermaier/CybICS-mgmt/actions/workflows/rpi-image.yml)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/mniedermaier)
 </div>
 
@@ -130,8 +130,8 @@ scoreboard URL to pin one on a projector.
 ### Installation
 
 ```bash
-git clone https://github.com/mniedermaier/CybICS-CTF.git
-cd CybICS-CTF
+git clone https://github.com/mniedermaier/CybICS-mgmt.git
+cd CybICS-mgmt
 cp .env.example .env        # optional: adjust settings
 docker compose up -d --build
 ```
@@ -437,5 +437,5 @@ CybICS-mgmt is released under the **MIT License**. See [LICENSE](/LICENSE) for d
   <a href="https://github.com/mniedermaier/CybICS">🏭 CybICS</a> •
   <a href="docs/ARCHITECTURE.md">📘 Architecture</a> •
   <a href="docs/API.md">🔌 API</a> •
-  <a href="https://github.com/mniedermaier/CybICS-CTF/issues">🐛 Report Issues</a>
+  <a href="https://github.com/mniedermaier/CybICS-mgmt/issues">🐛 Report Issues</a>
 </p>
