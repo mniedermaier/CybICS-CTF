@@ -2,9 +2,15 @@
 //
 // Nodes (PLCs, HMIs, sensors) drift slowly; nearby ones are linked, and data
 // packets travel along the links, like Modbus traffic in the CybICS plant.
-// Kept cheap for a projector machine running all day: capped node count,
-// ~30 fps, paused while the tab is hidden, and a single still frame under
-// prefers-reduced-motion. Colours follow the light/dark theme.
+// Kept cheap for a projector machine running all day, or a laptop on battery:
+//   - capped node count, drawn at device-pixel ratio 1 (it is a soft backdrop);
+//   - ~24 fps from a timer, so the browser produces no frames in between
+//     (a requestAnimationFrame loop wakes it at the display rate even when it
+//     skips drawing);
+//   - packet glow from a pre-rendered sprite, not shadowBlur;
+//   - stopped while the tab is hidden, one still frame under
+//     prefers-reduced-motion.
+// Colours follow the light/dark theme.
 (function () {
   "use strict";
   const canvas = document.getElementById("network");
@@ -12,24 +18,36 @@
   const ctx = canvas.getContext("2d");
   const reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const LINK = 190;          // px: nodes closer than this are linked
-  const FRAME_MS = 33;
+  const FRAME_MS = 42;
+  const GLOW = 8;            // px: radius of the packet glow
 
-  let width = 0, height = 0, nodes = [], packets = [], colors = {};
+  let width = 0, height = 0, nodes = [], packets = [], colors = {}, sprite = null;
 
   function readColors() {
     const light = document.documentElement.dataset.theme === "light";
     colors = light
       ? { node: "rgba(194, 65, 12, 0.55)", hub: "rgba(194, 65, 12, 0.85)", link: "194, 65, 12", packet: "#c2410c" }
       : { node: "rgba(255, 140, 66, 0.55)", hub: "rgba(255, 165, 0, 0.9)", link: "255, 120, 30", packet: "#ffb347" };
+    sprite = makeSprite(colors.packet);
+  }
+
+  // A glowing dot, drawn once with shadowBlur and then stamped per packet.
+  function makeSprite(color) {
+    const c = document.createElement("canvas");
+    c.width = c.height = GLOW * 4;
+    const g = c.getContext("2d");
+    g.fillStyle = color;
+    g.shadowColor = color;
+    g.shadowBlur = GLOW;
+    g.beginPath(); g.arc(GLOW * 2, GLOW * 2, 1.8, 0, Math.PI * 2); g.fill();
+    return c;
   }
 
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     width = canvas.clientWidth;
     height = canvas.clientHeight;
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    canvas.width = width;
+    canvas.height = height;
     const count = Math.max(18, Math.min(70, Math.round(width * height / 26000)));
     nodes = Array.from({ length: count }, (_, i) => ({
       x: Math.random() * width,
@@ -80,25 +98,20 @@
         ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill();
       }
     }
-    ctx.fillStyle = colors.packet;
-    ctx.shadowColor = colors.packet;
-    ctx.shadowBlur = 8;
     for (const p of packets) {
       const x = p.a.x + (p.b.x - p.a.x) * p.t, y = p.a.y + (p.b.y - p.a.y) * p.t;
-      ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.drawImage(sprite, x - GLOW * 2, y - GLOW * 2);
     }
-    ctx.shadowBlur = 0;
   }
 
-  let last = 0;
-  function loop(now) {
-    if (!document.hidden && now - last >= FRAME_MS) {
-      last = now;
-      step();
-      draw();
-    }
-    requestAnimationFrame(loop);
+  let timer = 0;
+  function loop() {
+    step();
+    draw();
+    timer = setTimeout(loop, FRAME_MS);
   }
+  function start() { if (!timer && !document.hidden) loop(); }
+  function stop() { clearTimeout(timer); timer = 0; }
 
   readColors();
   resize();
@@ -110,6 +123,7 @@
     draw();
     window.addEventListener("resize", draw);
   } else {
-    requestAnimationFrame(loop);
+    document.addEventListener("visibilitychange", () => (document.hidden ? stop() : start()));
+    start();
   }
 })();

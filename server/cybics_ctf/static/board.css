@@ -127,11 +127,15 @@ body.board main { max-width: none; padding: clamp(1rem, 2.5vh, 2rem) clamp(1rem,
 .live { display: inline-flex; align-items: center; gap: .5rem; padding: .3rem .9rem; border-radius: 999px;
         font: 700 clamp(.8rem, 1vw, 1.05rem) var(--mono); letter-spacing: .14em; text-transform: uppercase;
         color: var(--muted); border: 1px solid var(--card-border); background: var(--card); backdrop-filter: blur(8px); }
-.live .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--muted); }
+.live .dot { position: relative; width: .65rem; height: .65rem; border-radius: 50%; background: var(--muted); }
 .live.is-live { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
-.live.is-live .dot { background: var(--ok); box-shadow: 0 0 0 0 var(--ok); animation: pulse 1.8s ease-out infinite; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent); }
-                   100% { box-shadow: 0 0 0 .8rem transparent; } }
+.live.is-live .dot { background: var(--ok); }
+/* The ring is its own element that scales and fades: transform and opacity
+   stay on the compositor, while an animated box-shadow repaints every frame
+   (measured: a sixth of a CPU core for this dot and the champion glow). */
+.live.is-live .dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--ok);
+                            opacity: 0; animation: pulse 1.8s ease-out infinite; }
+@keyframes pulse { from { opacity: .7; transform: scale(1); } to { opacity: 0; transform: scale(3.4); } }
 .clock { font: 700 clamp(1.1rem, 2vw, 2.2rem) var(--mono); color: var(--heading); font-variant-numeric: tabular-nums; }
 .updated { color: var(--muted); font-size: .85rem; }
 #updated.stale { color: var(--warn); font-weight: 600; }
@@ -173,8 +177,12 @@ body.board main { max-width: none; padding: clamp(1rem, 2.5vh, 2rem) clamp(1rem,
 
 /* Podium. */
 .row.top1 { background: linear-gradient(90deg, var(--top1-tint), var(--top1-tint-end));
-            border-color: var(--top1-border); box-shadow: 0 0 32px var(--top1-glow);
-            animation: champion 3.2s ease-in-out infinite; }
+            border-color: var(--top1-border); box-shadow: 0 0 32px var(--top1-glow); }
+/* The breathing glow fades a fixed shadow in and out (opacity only), for the
+   same reason as the live dot. */
+.row.top1::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none;
+                   box-shadow: 0 0 52px var(--top1-glow-hi); opacity: 0;
+                   animation: champion 3.2s ease-in-out infinite; }
 .row.top2 { background: linear-gradient(90deg, var(--top2-tint), var(--top2-tint-end)); border-color: var(--top2-border); }
 .row.top3 { background: linear-gradient(90deg, var(--top3-tint), var(--top3-tint-end)); border-color: var(--top3-border); }
 .row.top1 .rank { color: var(--gold); text-shadow: 0 0 18px var(--top1-rank-glow); }
@@ -182,14 +190,13 @@ body.board main { max-width: none; padding: clamp(1rem, 2.5vh, 2rem) clamp(1rem,
 .row.top3 .rank { color: var(--bronze); }
 .row.top1 .rank::before { content: "\265B"; display: block; font-size: .55em; line-height: 1; margin-bottom: .1em;
                           animation: crown 2.4s ease-in-out infinite; }
-@keyframes champion { 50% { box-shadow: 0 0 52px var(--top1-glow-hi); } }
+@keyframes champion { 50% { opacity: 1; } }
 @keyframes crown { 50% { transform: translateY(-3px) rotate(-6deg); } }
 
 /* Rank changes: FLIP movement is driven from scoreboard.js; these add the
    colour that tells the room what happened. */
 .row.went-up { animation: flash-up 2.4s ease-out; }
 .row.went-down { animation: flash-down 2.4s ease-out; }
-.row.top1.went-up { animation: flash-up 2.4s ease-out, champion 3.2s ease-in-out 2.4s infinite; }
 @keyframes flash-up { 0%, 30% { box-shadow: 0 0 0 2px var(--up), 0 0 40px color-mix(in srgb, var(--up) 55%, transparent); } }
 @keyframes flash-down { 0%, 30% { box-shadow: 0 0 0 2px var(--down), 0 0 30px color-mix(in srgb, var(--down) 45%, transparent); } }
 .row.is-new { animation: arrive .9s cubic-bezier(.2, .8, .2, 1); }
@@ -257,7 +264,7 @@ body.board main { max-width: none; padding: clamp(1rem, 2.5vh, 2rem) clamp(1rem,
 /* ---------- reduced motion: everything holds still ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  .glow, .floor, .live.is-live .dot, .row.top1, .row.top1 .rank::before, .row.went-up, .row.went-down,
+  .glow, .floor, .live.is-live .dot::after, .row.top1::after, .row.top1 .rank::before, .row.went-up, .row.went-down,
   .row.is-new, .chip, .score.bump, .feed li.fresh, .announce.show, .announce.show * { animation: none !important; }
   .rows.ready .row .fill { transition: none; }
 }

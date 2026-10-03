@@ -251,7 +251,9 @@
   }
 
   refresh();
-  setInterval(refresh, POLL_MS);
+  // A hidden tab does not poll; it catches up as soon as it is shown again.
+  setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
   setInterval(showElapsed, 1000);
   showElapsed();
 
