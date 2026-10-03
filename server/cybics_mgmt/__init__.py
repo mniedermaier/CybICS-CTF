@@ -126,6 +126,10 @@ def create_app(test_config=None):
         # New teams per client address: keeps one person with the join code
         # from flooding the projector with junk teams.
         RATE_LIMIT_NEW_TEAMS=(_env_int("RATE_NEW_TEAMS", 100), 600),
+        # Unknown fleet enrolment codes per address per minute, and new
+        # devices one address may enrol per 10 minutes.
+        RATE_LIMIT_ENROL_CODE=(_env_int("RATE_ENROL_CODE", 60), 60),
+        RATE_LIMIT_NEW_DEVICES=(_env_int("RATE_NEW_DEVICES", 100), 600),
         # Requests with an unknown or revoked token, per address. Valid tokens
         # are never limited by this.
         RATE_LIMIT_BAD_TOKEN=(60, 60),
@@ -169,12 +173,14 @@ def create_app(test_config=None):
                                        env("FORWARDED_ALLOW_IPS", "127.0.0.1"),
                                        hops=max(1, _env_int("PROXY_HOPS", 1)))
 
-    # The CTF modules attach their routes to the shared blueprints on import,
-    # so they are imported before the blueprints are registered.
+    # The CTF and fleet modules attach their routes to the shared blueprints
+    # on import, so they are imported before the blueprints are registered.
     from . import admin, api, cli, public, views
     from .ctf import admin as _ctf_admin  # noqa: F401
     from .ctf import api as _ctf_api  # noqa: F401
     from .ctf import public as _ctf_public  # noqa: F401
+    from .fleet import admin as _fleet_admin  # noqa: F401
+    from .fleet import api as _fleet_api  # noqa: F401
     db.init_app(app)
     app.register_blueprint(api.bp)
     app.register_blueprint(admin.bp)

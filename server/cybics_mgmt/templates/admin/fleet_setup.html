@@ -1,0 +1,53 @@
+{% extends "admin/layout.html" %}
+{% set fleet_page = true %}
+{% block title %}Groups &amp; codes &middot; Fleet{% endblock %}
+{% block content %}
+<h1>Groups &amp; enrolment codes</h1>
+<div class="grid">
+  <div class="panel">
+    <h2>Enrolment codes</h2>
+    <p class="muted">A CybICS installation joins the fleet with this server's address and a code. Devices that enrol with
+      a code land in its group. An event's join code works too, without a group.</p>
+    <table>
+      <thead><tr><th>Code</th><th>Label</th><th>Group</th><th class="num">Uses</th><th></th></tr></thead>
+      <tbody>
+      {% for c in codes %}
+        <tr class="{{ 'muted' if not c.enabled }}"><td class="mono">{{ c.code }}</td><td>{{ c.label or '-' }}</td>
+            <td>{{ c.group_name or '-' }}</td><td class="num">{{ c.uses }}</td>
+            <td><form class="inline" method="post" action="{{ url_for('admin.fleet_code_action', code_id=c.id, action='disable' if c.enabled else 'enable') }}">
+                  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                  <button class="secondary" type="submit">{{ 'Disable' if c.enabled else 'Enable' }}</button></form></td></tr>
+      {% else %}<tr><td colspan="5" class="muted">No codes yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    <form method="post" action="{{ url_for('admin.fleet_code_create') }}" class="row">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="text" name="label" placeholder="Label, e.g. Lab boards" aria-label="Code label" maxlength="40">
+      <select name="group" aria-label="Group">
+        <option value="">No group</option>
+        {% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}
+      </select>
+      <button type="submit">New code</button>
+    </form>
+  </div>
+  <div class="panel">
+    <h2>Groups</h2>
+    <p class="muted">For example a room, a set of boards or a course. Deleting a group keeps its devices.</p>
+    <table>
+      <thead><tr><th>Group</th><th class="num">Devices</th><th></th></tr></thead>
+      <tbody>
+      {% for g in groups %}
+        <tr><td><a href="{{ url_for('admin.fleet_devices', group=g.id) }}">{{ g.name }}</a></td><td class="num">{{ g.devices }}</td>
+            <td><form class="inline" method="post" action="{{ url_for('admin.fleet_group_delete', group_id=g.id) }}" data-confirm="Delete this group? Its devices stay.">
+                  <input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="danger" type="submit">Delete</button></form></td></tr>
+      {% else %}<tr><td colspan="3" class="muted">No groups yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    <form method="post" action="{{ url_for('admin.fleet_group_create') }}" class="row">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="text" name="name" placeholder="Name, e.g. Room 2" aria-label="Group name" maxlength="40" required>
+      <button type="submit">New group</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

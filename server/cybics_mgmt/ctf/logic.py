@@ -11,8 +11,11 @@ import re
 import unicodedata
 import uuid
 
+from .. import device_input
 from ..db import now, transaction
+from ..device_input import encodable as _encodable
 from ..errors import MgmtError
+from ..fleet import logic as fleet
 from ..security import flag_matches, hash_flag, hash_password, hash_token, new_join_code, new_token, verify_password
 
 EVENT_STATES = ("draft", "running", "paused", "finished")
@@ -46,7 +49,6 @@ password passwort 12345678 123456789 1234567890 qwertyui qwertzui iloveyou sunsh
 football baseball welcome1 password1 passwort1 abcdefgh abcd1234 11111111 00000000 87654321
 letmein1 trustno1 changeme admin123 administrator cybics123 cybicsctf hackerman qwerty123
 """.split())
-INSTANCE_KINDS = ("virtual", "physical")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 # Latin script only (ASCII plus Latin-1 and Latin Extended-A letters, so
 # umlauts and accents work): look-alike letters from Cyrillic, Greek or the
@@ -82,19 +84,6 @@ def _text(value, field, required=True):
         # JSON allows lone surrogates ("\ud800"); UTF-8, hashing and SQLite do not.
         raise CTFError("invalid_input", f"{field} must be valid Unicode.")
     return value
-
-
-def _encodable(value):
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError:
-        return False
-    return True
-
-
-def _scrub(value):
-    """Lone surrogates in an informational string become "?" instead of a 500."""
-    return value if _encodable(value) else value.encode("utf-8", "replace").decode("utf-8")
 
 
 # Instance clocks are informational, but they end up in the admin UI; keep
@@ -369,29 +358,10 @@ def _check_lookalike(db, event_id, name):
 
 
 def _validate_instance(info):
-    if not isinstance(info, dict):
-        raise CTFError("invalid_instance", "instance must be an object.")
-    kind = info.get("kind")
-    if kind not in INSTANCE_KINDS:
-        raise CTFError("invalid_instance", "instance.kind must be 'virtual' or 'physical'.")
-    # Only a physical board has a UID; a virtual instance sending one is ignored.
-    device_uid = (info.get("device_uid") or None) if kind == "physical" else None
-    if device_uid is not None:
-        device_uid = str(device_uid).lower()
-        if not re.fullmatch(r"[0-9a-f]{6,32}", device_uid):
-            raise CTFError("invalid_instance", "instance.device_uid must be hex (the STM32 UID).")
-    if kind == "physical" and not device_uid:
-        raise CTFError("invalid_instance", "A physical instance must send its device_uid.")
-
-    def short(field, limit=64):
-        value = info.get(field)
-        return _scrub(str(value))[:limit] if value not in (None, "") else None
-
-    return {"kind": kind, "device_uid": device_uid, "hostname": short("hostname"),
-            "cybics_version": short("cybics_version", 32), "mode": short("mode", 32)}
+    return device_input.device_info(info, lambda message: CTFError("invalid_instance", message))
 
 
-def enroll(db, join_code, team_name, team_password, instance_info, remote_addr):
+def enroll(db, join_code, team_name, team_password, instance_info, remote_addr, device_id=None):
     """
     Register an instance with a team, creating the team on first use.
 
@@ -399,6 +369,10 @@ def enroll(db, join_code, team_name, team_password, instance_info, remote_addr):
     exactly once; only its hash is stored. uid_teams lists other teams with a
     live instance claiming the same board UID; the caller logs it, and the
     admin UI flags it.
+
+    device_id links the instance to a fleet device the caller authenticated.
+    Without one, the instance gets a legacy device of its own: a board
+    re-enrolling in its team keeps the device of the instance it replaces.
     """
     event = get_event_by_join_code(db, join_code)
     if event is None:
@@ -483,6 +457,12 @@ def enroll(db, join_code, team_name, team_password, instance_info, remote_addr):
         # another team's board offline.
         uid_teams = []
         if info["device_uid"]:
+            replaced = db.execute("""SELECT device_id FROM instances
+                                     WHERE device_uid = ? AND revoked = 0 AND team_id = ?
+                                     ORDER BY enrolled_at DESC LIMIT 1""",
+                                  (info["device_uid"], team["id"])).fetchone()
+            if device_id is None and replaced is not None:
+                device_id = fleet.legacy_device_for(db, replaced["device_id"])
             db.execute("""UPDATE instances SET revoked = 1
                           WHERE device_uid = ? AND revoked = 0 AND team_id = ?""",
                        (info["device_uid"], team["id"]))
@@ -494,12 +474,16 @@ def enroll(db, join_code, team_name, team_password, instance_info, remote_addr):
         instance_id = str(uuid.uuid4())
         token = new_token()
         ts = now()
+        if device_id is None:
+            device_id = fleet.create_legacy_device(db, instance_id, info, remote_addr)
+        else:
+            fleet.refresh_legacy_device(db, device_id, info, remote_addr)
         db.execute("""
             INSERT INTO instances (id, team_id, token_hash, kind, device_uid, hostname,
-                                   cybics_version, mode, remote_addr, enrolled_at, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   cybics_version, mode, remote_addr, enrolled_at, last_seen, device_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                    (instance_id, team["id"], hash_token(token), info["kind"], info["device_uid"],
-                    info["hostname"], info["cybics_version"], info["mode"], remote_addr, ts, ts))
+                    info["hostname"], info["cybics_version"], info["mode"], remote_addr, ts, ts, device_id))
     return instance_id, token, event, team, uid_teams
 
 
@@ -517,50 +501,20 @@ def authenticate_instance(db, token):
     return row
 
 
-STATUS_MAX_BYTES = 16384
-STATUS_MAX_DEPTH = 8
-
-
-def _depth(value, limit=STATUS_MAX_DEPTH + 1):
-    """Nesting depth of JSON data, iteratively and capped (no recursion to exploit)."""
-    deepest, stack = 0, [(value, 1)]
-    while stack:
-        item, level = stack.pop()
-        deepest = max(deepest, level)
-        if deepest >= limit:
-            return deepest
-        if isinstance(item, dict):
-            stack.extend((v, level + 1) for v in item.values())
-        elif isinstance(item, list):
-            stack.extend((v, level + 1) for v in item)
-    return deepest
-
-
 def record_heartbeat(db, instance_id, status, remote_addr):
     """Store the instance's status; a heartbeat without one keeps the previous status."""
-    info = status if isinstance(status, dict) else {}
-    status_json = None
-    if info:
-        if _depth(info) > STATUS_MAX_DEPTH:
-            # Deep nesting is no status, it is an attack on whoever renders
-            # it (Python's pretty-printer recurses). Never store it.
-            info = {"error": "status too deeply nested, discarded"}
-        status_json = json.dumps(info, separators=(",", ":"))
-        if len(status_json) > STATUS_MAX_BYTES:
-            info = {"error": "status too large, discarded"}
-            status_json = json.dumps(info)
+    info, status_json = device_input.clean_status(status)
+    version = device_input.opt_str(info.get("cybics_version"), 32)
+    mode = device_input.opt_str(info.get("mode"), 32)
     db.execute("""
         UPDATE instances SET last_seen = ?, remote_addr = ?,
             status_json = COALESCE(?, status_json),
             cybics_version = COALESCE(?, cybics_version), mode = COALESCE(?, mode)
         WHERE id = ?""",
-               (now(), remote_addr, status_json,
-                _opt_str(info.get("cybics_version"), 32), _opt_str(info.get("mode"), 32),
-                instance_id))
-
-
-def _opt_str(value, limit):
-    return _scrub(str(value))[:limit] if value not in (None, "") else None
+               (now(), remote_addr, status_json, version, mode, instance_id))
+    row = db.execute("SELECT device_id FROM instances WHERE id = ?", (instance_id,)).fetchone()
+    if row is not None and row["device_id"]:
+        fleet.mirror_legacy_status(db, row["device_id"], status_json, version, mode, remote_addr)
 
 
 def revoke_instance(db, instance_id):

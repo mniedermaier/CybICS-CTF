@@ -16,7 +16,7 @@ def test_info_keeps_the_service_deployed_clients_check(client):
     data = client.get("/api/v1/info").get_json()
     assert data["service"] == "cybics-ctf"
     assert data["product"] == "cybics-mgmt"
-    assert data["features"] == ["ctf"]
+    assert data["features"] == ["ctf", "fleet"]
 
 
 def test_mgmt_setting_wins_over_the_legacy_name(monkeypatch):

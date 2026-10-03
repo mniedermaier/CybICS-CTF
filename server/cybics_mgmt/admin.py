@@ -149,7 +149,9 @@ def logout():
 LOCKOUTS = (
     ("enroll-fail:", "RATE_LIMIT_ENROLL", "wrong team passwords"),
     ("newteam:", "RATE_LIMIT_NEW_TEAMS", "new teams"),
-    ("badtoken:", "RATE_LIMIT_BAD_TOKEN", "unknown instance tokens"),
+    ("badtoken:", "RATE_LIMIT_BAD_TOKEN", "unknown instance or device tokens"),
+    ("enrolcode-fail:", "RATE_LIMIT_ENROL_CODE", "unknown fleet enrolment codes"),
+    ("newdevice:", "RATE_LIMIT_NEW_DEVICES", "new fleet devices"),
     ("login:", "RATE_LIMIT_LOGIN", "failed admin logins"),
 )
 

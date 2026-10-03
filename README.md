@@ -111,7 +111,7 @@ scoreboard URL to pin one on a projector.
 | Reference client (`client/cybics_mgmt_client.py`) | ✅ Ready, tested on Python 3.9 and 3.12 |
 | CybICS landing page: **Settings → Central CTF server** | ✅ In CybICS v1.2.4 |
 | CybICS Raspberry Pi: second Wi-Fi interface for the uplink | ✅ In CybICS v1.2.4 |
-| Fleet: device overview across events | 🚧 Phase 1 of [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md) |
+| Fleet: device overview across events, groups, enrolment codes | ✅ Ready; CTF-only devices show what their CTF heartbeat reports |
 | Fleet: remote actions on devices that allow them | 🚧 Phase 2 of [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md), needs a CybICS release |
 
 ---
@@ -175,6 +175,22 @@ The containers' root filesystems are read-only, so the catalog is piped in on st
   **disqualify** a team. Several teams can be handled at once on the *Teams* page.
 - **Announcements** reach every enrolled landing page within one heartbeat (30 s).
 - **Log** keeps every organiser action, from the web UI and the command line.
+
+### The fleet
+
+*Fleet* lists every CybICS installation the server knows, across events: online state, version (with
+an *outdated* marker against the newest in the fleet), service health, group and CTF team.
+
+- Installations that enrolled in an event show up automatically, marked *CTF only*: CybICS v1.2.4
+  has no fleet support yet, so they report what their CTF heartbeat says and offer no actions.
+- **Groups** (a room, a set of boards) and **enrolment codes** are on *Fleet → Groups & codes*. A
+  device that enrols with a code lands in its group; an event's join code works too.
+- Give boards a **label** that matches the sticker on them, and **retire** devices you no longer use.
+  Nothing is deleted.
+- Two devices reporting the same board UID are flagged, never merged: the UID is broadcast in the
+  board's SSID and can be copied.
+- Remote actions (restart a service, collect logs, ...) are phase 2 of
+  [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md) and need a CybICS release with fleet support.
 
 ### Locked out?
 
@@ -284,6 +300,8 @@ cp .env.example .env
 | `MGMT_ONLINE_WINDOW` | `90` | An instance counts as online if it checked in within this many seconds. |
 | `MGMT_RATE_ENROLL` | `60` | Wrong team passwords per address per minute before enrolment from it pauses. `0` switches the guard off. |
 | `MGMT_RATE_NEW_TEAMS` | `100` | New teams one address may create per 10 minutes. Only teams actually created count. |
+| `MGMT_RATE_ENROL_CODE` | `60` | Unknown fleet enrolment codes per address per minute before fleet enrolment from it pauses. |
+| `MGMT_RATE_NEW_DEVICES` | `100` | New fleet devices one address may enrol per 10 minutes. Only devices actually created count. |
 | `MGMT_RATE_HEARTBEAT` / `MGMT_RATE_SOLVE` | `30` | Requests per instance per minute. |
 | `MGMT_RATE_LOGIN` | `10` | Failed admin logins per address per 5 minutes. |
 | `MGMT_ADMIN_SESSION_HOURS` | `12` | Admin sessions end after this many hours, on log out, or when the admin password changes. |

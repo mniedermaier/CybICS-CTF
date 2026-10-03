@@ -46,6 +46,8 @@ Never stage `server/data/`, `*.sqlite`, `.env` or anything holding a real admin 
   - `admin.py`: the `/admin` blueprint, login, sessions, `LOCKOUTS` and `csv_response`.
   - `public.py`: the start page, `/healthz` and `/favicon.ico`.
   - `errors.py`: `MgmtError`, the base of every error a caller can fix (`ctf.CTFError` is one).
+  - `device_input.py`: checks for what installations send about themselves (identity, status),
+    shared by both parts.
   - `security.py`: tokens, hashing, the rate limiter, admin session and CSRF.
   - `db.py`: SQLite, migrations, and the one-off adoption of the pre-rename `cybics-ctf.sqlite`.
   - `views.py`: template filters, error pages and security headers.
@@ -56,6 +58,9 @@ Never stage `server/data/`, `*.sqlite`, `.env` or anything holding a real admin 
       no request handling, and every function takes the DB connection. Code imports it as
       `from .ctf import logic as ctf`.
     - `api.py`, `admin.py`, `public.py` (the scoreboard), `cli.py` (event commands).
+  - `fleet/`: the fleet part (devices, groups, enrolment codes), built the same way: `logic.py`
+    (never imports the CTF part), `api.py` (`/api/v1/fleet/*`), `admin.py` (`/admin/fleet/*`,
+    endpoints `admin.fleet_*`).
 - `server/cybics_ctf/`: a shim, so `flask --app cybics_ctf` keeps working.
 - `server/tests/`: pytest. `test_client.py` runs the reference client against a live server;
   `test_compat.py` guards the rename's compatibility.
@@ -103,6 +108,15 @@ same way: `docker run --rm -v "$PWD:/src" python:3.12-alpine sh -c 'cd /src && r
   - `/api/v1/info` answers `"service": "cybics-ctf"` forever in v1: deployed clients check it.
   - `CTF_*` settings, `flask --app cybics_ctf`, the `cybics-ctf.sqlite` file, `cybics-ctf-*`
     backups and the `cybics-ctf-theme` key are still honoured. `test_compat.py` covers them.
+- **Devices are retired, never deleted.** A device is one CybICS installation and outlives events:
+  deleting an event or a team removes its instances, never its devices. Every CTF instance has a
+  device (`instances.device_id`); a client without fleet support gets a *legacy* device, which
+  mirrors the CTF heartbeat and offers no actions. A board re-enrolling in its team keeps its legacy
+  device; across teams it never does.
+- **Device input is display data.** Fleet telemetry goes through `device_input.py`, like instance
+  status, and never decides anything. The board UID only *suggests* that two devices are one board.
+- **Fleet organiser actions are audited with an action starting with `fleet_`.** They have no
+  event, are listed on the fleet log, and stay off the events page's login list.
 - **The API is a contract with deployed CybICS releases.** Changes under `/api/v1` may only *add*
   fields or endpoints. Renaming, removing or changing the meaning of anything needs `/api/v2`, served
   alongside v1. Update `docs/API.md` in the same change.

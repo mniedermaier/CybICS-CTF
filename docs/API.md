@@ -3,7 +3,8 @@
 Base path: `/api/v1`. All request and response bodies are JSON.
 
 - **Authentication.** Endpoints marked 🔒 need `Authorization: Bearer <token>`, using the token
-  returned by `/enroll`.
+  returned by `/enroll`. Endpoints marked 🔑 need the device token returned by `/fleet/enroll`
+  instead.
 - **Errors.** Every error has the same shape. Show `message` to the user unchanged:
 
 ```json
@@ -14,8 +15,8 @@ Base path: `/api/v1`. All request and response bodies are JSON.
 |---|---|
 | 400 | Bad input; see `code`. A field of the wrong JSON type is `invalid_input`. |
 | 401 `unauthorized` | Token unknown or revoked. Stop syncing and ask the user to enrol again. Repeated *unknown* tokens from one address are rate limited; a valid token is never limited by that, so garbage from a shared NAT address cannot stall honest instances behind it. |
-| 403 | `wrong_team_password`, `registration_closed`, `team_banned`. `team_banned` is not permanent: the organiser can reinstate the team, so keep retrying with backoff. |
-| 404 | `invalid_join_code`, `not_found`. |
+| 403 | `wrong_team_password`, `registration_closed`, `team_banned`, `invalid_device_token`, `code_disabled` (fleet). `team_banned` is not permanent: the organiser can reinstate the team, so keep retrying with backoff. |
+| 404 | `invalid_join_code`, `invalid_code` (fleet), `not_found`. |
 | 4xx without this JSON shape | Not from this server (a reverse proxy's error page while the backend restarts). Treat it like a 5xx: keep queued data and retry. |
 | 409 | `event_finished`, `team_name_taken`, `too_many_instances` (25 active per team). |
 | 503 `busy` | No password-hashing slot within 2 s, or the team changed during the request. Retry after a few seconds. |
@@ -30,7 +31,7 @@ Base path: `/api/v1`. All request and response bodies are JSON.
 Unauthenticated. The landing page's **Test connection** button calls this.
 
 ```json
-{"service": "cybics-ctf", "product": "cybics-mgmt", "features": ["ctf"], "name": "CybICS-mgmt",
+{"service": "cybics-ctf", "product": "cybics-mgmt", "features": ["ctf", "fleet"], "name": "CybICS-mgmt",
  "version": "0.1.0", "api_version": 1, "server_time": 1790844304.29}
 ```
 
@@ -85,6 +86,11 @@ enrolment requests to 8 per second per address and queues bursts instead of refu
   "heartbeat_interval": 30
 }
 ```
+
+Optionally, a client that is also enrolled in the fleet sends `"device_token": "…"`, the token from
+`/fleet/enroll`. The instance then belongs to that device. An unknown or retired device token is
+`403 invalid_device_token`. Without the field, the server creates a *legacy* device for the instance,
+which the organiser sees in the fleet with what the CTF heartbeat reports.
 
 When a physical board re-enrols with the same `device_uid` **in the same team**, its previous
 registration is revoked. The UID is broadcast in the board's SSID, so anyone can claim it, and it is
@@ -214,3 +220,82 @@ let one participant behind the projector's NAT address blank the projector.
   "server_time": 1790844330.0
 }
 ```
+
+---
+
+# Fleet
+
+The fleet endpoints live under `/api/v1/fleet/` and were added with CybICS-mgmt (`"fleet"` in the
+`features` of `/info`). A device is one CybICS installation; [MGMT_DESIGN.md](MGMT_DESIGN.md) has the
+design. Deployed CybICS releases do not call them.
+
+## `POST /fleet/enroll`
+
+Enrols a device. `code` is an enrolment code from the organiser's *Fleet → Groups & codes* page, or
+the join code of an event that is not finished. A device that enrols with an enrolment code joins
+that code's group. The proxy queues these requests together with `/enroll`.
+
+```json
+{
+  "code": "7KQ2MWXA",
+  "label": "Board 7",                 // optional, at most 40 characters; the organiser can change it
+  "device": {
+    "kind": "physical",               // "virtual" | "physical"
+    "device_uid": "0042001a3133",     // STM32 UID, hex; required for physical
+    "hostname": "cybics",
+    "cybics_version": "1.2.4",
+    "mode": "full"
+  }
+}
+```
+
+`201`:
+
+```json
+{
+  "device_id": "0b6f…",
+  "token": "…",                       // returned only once; the server keeps a hash
+  "device": {"id": "0b6f…", "label": "Board 7", "group": "Room 2"},
+  "heartbeat_interval": 30
+}
+```
+
+- Unknown code: `404 invalid_code`; disabled code: `403 code_disabled`; malformed device:
+  `400 invalid_device`.
+- Flood guards per address, both shown on the organiser's *Events* page with a button to clear them:
+  60 unknown codes per minute, and 100 new devices per 10 minutes. Only devices actually created
+  count.
+- The board UID is never used to authenticate or to merge devices. It is broadcast in the SSID.
+
+## 🔑 `POST /fleet/heartbeat`
+
+Every `heartbeat_interval` seconds. `status` is stored as the device's last status, under the same
+limits as the CTF heartbeat (16 KB, nesting depth 8; anything larger or deeper is replaced by an
+error note). A heartbeat without `status` keeps the previous one. `cybics_version`, `mode` and
+`hostname` in the status update the device's columns.
+
+```json
+{
+  "status": {
+    "cybics_version": "1.2.4",
+    "mode": "full",
+    "hostname": "cybics",
+    "services": {"openplc": true, "fuxa": true, "hwio": false}
+  }
+}
+```
+
+`200`:
+
+```json
+{"device": {"id": "0b6f…", "label": "Board 7", "group": "Room 2"}, "heartbeat_interval": 30,
+ "server_time": 1790844330.0}
+```
+
+A retired device gets `401 unauthorized`, like an unknown token. The organiser can bring it back,
+and the same token then works again.
+
+## 🔑 `DELETE /fleet/device`
+
+The user switched fleet management off on the device. The device is retired (`204`); its history
+stays.
