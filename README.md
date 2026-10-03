@@ -17,6 +17,10 @@
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/mniedermaier)
 </div>
 
+<p align="center">
+  <img alt="CybICS-mgmt hosts the Wi-Fi network cybics-mgmt on a Raspberry Pi; CybICS boards and laptops join it, report solves to the projector scoreboard, and take signed actions from the organiser" src="docs/pics/cybics-mgmt.gif" width="100%">
+</p>
+
 ---
 
 ## What is CybICS-mgmt?
@@ -78,29 +82,35 @@ server goes away, and reports what it missed when the server comes back.
 
 ## Screenshots
 
+### 📺 Scoreboard for the projector
+**Recorded live: a team climbs, a first blood takes over the screen, ranks move with ▲ and ▼**
+
+<img alt="The live scoreboard: Blue Team climbs, SCADA Sharks get a first blood, Modbus Mafia takes the lead" src="docs/pics/scoreboard-live.gif" width="100%">
+
 <table>
 <tr>
-<td width="62%" valign="top">
+<td width="55%" valign="top">
 
-### 📺 Scoreboard for the projector
-**Live ranking, rank changes, first blood bonus**
+### 🛰️ Fleet
+**Every CybICS installation across events: online state, version, services, team, allowed actions**
 
-<img src="docs/pics/scoreboard.png" width="100%">
+<img alt="The fleet page with boards and laptops in two groups" src="docs/pics/fleet.png" width="100%">
 
 </td>
-<td width="38%" valign="top">
+<td width="45%" valign="top">
 
 ### 🛠️ Organiser view
 **Join code, event state, teams, announcements**
 
-<img src="docs/pics/admin.png" width="100%">
+<img alt="The organiser's event page" src="docs/pics/admin.png" width="100%">
 
 </td>
 </tr>
 </table>
 
-Both follow the CybICS look, in a dark and a light theme. Add `?theme=dark` or `?theme=light` to the
-scoreboard URL to pin one on a projector.
+Everything follows the CybICS look, in a dark and a light theme. Add `?theme=dark` or
+`?theme=light` to the scoreboard URL to pin one on a projector. The animated diagram at the top is
+drawn by `tools/readme_animation.py`; the scoreboard was recorded from a real server.
 
 ---
 
