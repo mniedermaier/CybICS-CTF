@@ -5,7 +5,7 @@ The rules this module keeps:
 
 - only the actions in ACTIONS exist, each with validated parameters: no
   shell, no file write, no generic command;
-- a job is created only for a device that runs a client with fleet support,
+- a job is created only for a device that reported its management settings,
   allows the action, and pinned the key the server signs with;
 - every job carries a sequence number that increases per device, and the
   server's signature over it, so a device can refuse replays and forgeries;

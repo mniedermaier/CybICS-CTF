@@ -1,38 +1,49 @@
 # Integrating with CybICS
 
 This document lists the changes needed in the [CybICS](https://github.com/mniedermaier/CybICS)
-repository so that instances can connect to this server. None of them changes how CybICS behaves
-**until a user enables the central server in the landing page**: the feature is off by default and
-optional.
+repository so that installations can connect to this server. None of them changes how CybICS
+behaves **until a user connects the installation in the landing page**: the feature is off by
+default and optional.
 
-File and line references are against the CybICS tag `v1.2.3`, with function names given where they
-help to find the place again once lines move.
+The integration targets the CybICS release that replaces v1.2.4. That release ships the client
+described here and speaks the API in [API.md](API.md); no earlier client is supported. File and line
+references are against the CybICS tag `v1.2.3`, with function names given where they help to find
+the place again once lines move.
 
 ## 1. Landing service (virtual and physical)
 
 ### Vendor the client
 
-Copy `client/cybics_mgmt_client.py` (called `cybics_ctf_client.py` before the rename to CybICS-mgmt)
-to `software/landing/modules/central_ctf.py`. It needs only the
+Copy `client/cybics_mgmt_client.py` to `software/landing/modules/cybics_mgmt.py`. It needs only the
 standard library, so `requirements.txt` stays unchanged. Create one instance at import time, next to
 the other managers (`app.py:44-47` in v1.2.3):
 
 ```python
-from modules.central_ctf import CTFClient, CTFClientError
+from modules.cybics_mgmt import MgmtClient, MgmtClientError
 
-central = CTFClient(
-    state_path=os.path.join(DATA_DIR, "central_ctf.json"),
+mgmt = MgmtClient(
+    state_path=os.path.join(DATA_DIR, "cybics_mgmt.json"),
+    device_info=device_info,             # kind, device_uid, hostname, cybics_version, mode
+    status=collect_mgmt_status,          # see below
     local_solves=read_progress_strict,   # must raise on a read error, see below
     flag_for=lambda cid: (ctf_manager.get_challenge(cid)[0] or {}).get("flag"),
-    status=collect_central_status,   # see below
+    handlers=JOB_HANDLERS,               # see "Job handlers"
 )
-central.start()   # sleeps until enrolled; no network traffic while disabled
+mgmt.start()   # sleeps until connected; no network traffic before that
 ```
 
-`local_solves` must **raise** when the progress cannot be read. It must not return an empty list. At
-enrolment, the client stores the current local solves as a baseline that is never reported. If the
-callback returns an empty list because of a read error, every old solve on a reused board is
-reported as new. Raising makes the enrolment fail with `progress_unreadable`, and the user tries
+`device_info()` returns the identity sent at enrolment:
+
+- `kind`: `"physical"` on the Pi, `"virtual"` otherwise. An env var set in each compose file is the
+  simplest switch (`CYBICS_PLATFORM=physical` in `software/docker-compose.yaml` and the rpi-image
+  compose).
+- `device_uid`: the STM32 UID on the Pi (see section 2). A physical device without one cannot enrol.
+- `cybics_version`, `mode` and `hostname`.
+
+`local_solves` must **raise** when the progress cannot be read. It must not return an empty list.
+When the device joins a team, the client stores the current local solves as a baseline that is never
+reported. If the callback returns an empty list because of a read error, every old solve on a reused
+board is reported as new. Raising makes the join fail with `progress_unreadable`, and the user tries
 again.
 
 In v1.2.3, `CTFManager.load_progress` catches `JSONDecodeError` and returns empty progress, so
@@ -53,72 +64,107 @@ Add one line after each successful local solve. That is `submit_flag()` (`app.py
 `if submit_result['success']` is at line 407):
 
 ```python
-central.report_solve(challenge_id, submitted_flag)        # or result['flag'] in verify_defense
+mgmt.report_solve(challenge_id, submitted_flag)        # or result['flag'] in verify_defense
 ```
 
-`report_solve` only appends to a file and wakes a thread. It never raises, even when the file cannot
-be written (a full SD card), and never blocks, so it cannot fail or slow down the local submission.
-The background thread also survives any error and backs off.
+`report_solve` only appends to a file and wakes a thread, and only while the device is in an event
+(or was taken out of one by the organiser). It never raises, even when the file cannot be written (a
+full SD card), and never blocks, so it cannot fail or slow down the local submission. The background
+thread also survives any error and backs off.
 
-`POST /ctf/reset` (`app.py:456`) should leave the central enrolment alone. A reset clears local progress only;
-solves already reported stay on the scoreboard.
+`POST /ctf/reset` (`app.py:456`) should leave the connection alone. A reset clears local progress
+only; solves already reported stay on the scoreboard.
 
-### Settings UI: Settings → Central CTF server
+### Settings UI: Settings → CybICS-mgmt
 
-The landing page already has a settings area (`/api/settings/*`). The new section needs:
+The landing page already has a settings area (`/api/settings/*`). One new section covers the
+connection, the CTF and management. Show `MgmtClientError.message` as-is everywhere; the server
+writes it for end users.
 
-- **Off** (default): an explanation that this is optional, and the fields *Server address*, *Join
-  code*, *Team name* and *Team password*.
-  - A **Test connection** button calls `central.test_connection(url)`.
-  - A **Join** button calls `central.enroll(...)`.
-  - Show `CTFClientError.message` as-is; the server writes it for end users.
-- **On**:
-  - the server and team name;
-  - the event state (show "waiting for start" in `draft`);
-  - score and rank (`standing`);
-  - pending reports (`pending`), the last contact and the last error;
-  - announcements;
-  - a **Leave** button that calls `central.leave()`.
+- **Not connected** (default): an explanation that this is optional, and the fields *Server
+  address*, *Code* (an enrolment code from the organiser, or an event's join code) and an optional
+  *Label*.
+  - **Test connection** calls `mgmt.test_connection(url)`.
+  - **Connect** calls `mgmt.enroll(url, code, label)`.
+- **Connected**:
+  - the server, the device's label and group (`device`), the last contact and the last error;
+  - **Event**: while in no event, the fields *Join code*, *Team name* and *Team password* and a
+    **Join** button that calls `mgmt.join_event(join_code, team, password)`. Teammates enter the
+    same team name and password. In an event: the event and team, the event state (show "waiting for
+    start" in `draft`), score and rank (`ctf.standing`), pending reports (`ctf.pending`),
+    announcements, and a **Leave event** button that calls `mgmt.leave_event()`. The organiser can
+    also put the device into a team; the snapshot then shows it without the user doing anything.
+    `ctf.removed` means the organiser took the device out: solves stay queued until it is back.
+  - **Allowed actions**: one switch per action in `available` (the actions landing registered a
+    handler for), all off after connecting; `mgmt.set_allowed([...])`. Switching everything off is
+    the kill switch.
+  - The signing key's fingerprint (`key_fingerprint`). The organiser's device page shows the same
+    value, so a trainer can compare them.
+  - The job queue and history (`queue`, `history`). `last_error` with the code `bad_signature`
+    means somebody sent a forged job.
+  - **Disconnect** calls `mgmt.leave()`. The device is retired on the server and leaves its event;
+    connecting again enrols a new device.
+  - `revoked` means the organiser retired the device: show it, and offer to connect again.
 - Suggested routes:
-  - `GET /api/settings/central` returns `central.snapshot()`, which never contains the token;
-  - `POST /api/settings/central/test`;
-  - `POST /api/settings/central/enroll`;
-  - `POST /api/settings/central/leave`.
-- The `instance` dict sent to `enroll`:
-  - `kind`: `"physical"` on the Pi, `"virtual"` otherwise. An env var set in each compose file is
-    the simplest switch (`CYBICS_PLATFORM=physical` in `software/docker-compose.yaml` and the
-    rpi-image compose).
-  - `device_uid`: the STM32 UID on the Pi (see section 2).
-  - `cybics_version`, `mode` and `hostname`.
+  - `GET /api/settings/mgmt` returns `mgmt.snapshot()`, which never contains the token, the key or
+    the baseline;
+  - `POST /api/settings/mgmt/test`, `/connect`, `/join`, `/leave-event`, `/allowed` and
+    `/disconnect`.
 
-Optional: a small badge in the dashboard header ("Central CTF: rank 3/14") and a toast for new
-announcements. `index.html` already polls `/ctf/progress`, so it can poll the snapshot too.
+Optional: a small badge in the dashboard header ("CybICS-mgmt: rank 3/14"), a toast for new
+announcements, and the banner for `identify` and `message` jobs. `index.html` already polls
+`/ctf/progress`, so it can poll the snapshot too.
+
+### Job handlers
+
+The client **executes nothing by itself**: landing registers one handler per action, and only for
+the actions it wants to offer. A handler gets the job's parameters, already checked by the server,
+and returns a short result text (`collect_logs` returns the log text or bytes).
+
+```python
+JOB_HANDLERS = {
+    "identify": lambda p: ui.banner(f"This is {mgmt.snapshot()['device']['label']}",
+                                    seconds=p["seconds"]),
+    "message": lambda p: ui.banner(p["text"], seconds=300),
+    "restart": lambda p: restart.restart_project() if p["service"] == "all"
+                         else restart.restart_service(p["service"]),
+    "reset_progress": lambda p: ctf_manager.reset_progress(),
+    "collect_logs": lambda p: logs.bundle_text(),   # the text of /api/settings/logs/download
+}
+```
+
+`restart` with `all` takes landing down too. The client records the job as running before it starts,
+and reports it as done after landing comes back.
 
 ### Status payload
 
-`collect_central_status()` should stay small and cheap. It runs every 30 s, and the server keeps at
-most 16 KB of it.
+`collect_mgmt_status()` should stay small and cheap. It runs every 30 s, and the server keeps at
+most 16 KB of it. Everything is optional:
 
 ```python
-def collect_central_status():
+def collect_mgmt_status():
     # get_docker_containers() serves StatsCollector's cache (no Docker call);
     # each entry carries 'name' and 'status' (the container State).
     containers = stats_collector.get_docker_containers()
     return {
         "cybics_version": os.environ.get("CYBICS_VERSION"),
         "mode": os.environ.get("CYBICS_MODE"),
+        "hostname": socket.gethostname(),
         "services": {c["name"]: c["status"] == "running" for c in containers},
-        "local_solved": ctf_manager.load_progress()["solved_challenges"],
+        "host": {...},    # CPU %, memory, disk, uptime, CPU temperature
+        "board": {...},   # on a board: revision, firmware version, STM32 link, uplink SSID and signal
     }
 ```
 
-Do **not** include anything that reveals the participant's network beyond what the organiser needs.
+The client adds `local_solved` itself. The CPU temperature is in
+`/sys/class/thermal/thermal_zone0/temp`. Do **not** include anything that reveals the participant's
+network beyond what the organiser needs.
 
 ### Persist landing's data directory
 
-None of the compose files mounts `/CybICS/data`, so `ctf_progress.json` and the new `central_ctf.json`
-(which holds the instance token) are lost when the container is recreated. Add a named volume to
-`landing` in all three compose files:
+None of the compose files mounts `/CybICS/data`, so `ctf_progress.json` and the new
+`cybics_mgmt.json` (which holds the device token and the outbox) are lost when the container is
+recreated. Add a named volume to `landing` in all three compose files:
 
 - `.devcontainer/virtual/docker-compose.yml`
 - `software/docker-compose.yaml`
@@ -135,55 +181,11 @@ variable for image tags) or bake it in at image build time.
 `landing` runs with host networking, `NET_ADMIN` and the Docker socket. The client adds:
 
 - one outbound HTTP(S) connection to a URL the user typed in;
-- one file in landing's data directory.
+- one file in landing's data directory;
+- the actions the user switched on, each with fixed parameters checked by the server and the
+  handler, and only from jobs signed with the key pinned when connecting.
 
-It opens no listening port and runs no commands.
-
-### Fleet management
-
-CybICS-mgmt can also manage the installation (`docs/MGMT_DESIGN.md`). The same client file has a
-`FleetClient` for that. Like the CTF client it is off until the user enrols, and it **executes
-nothing by itself**: landing registers one handler per action, and only for the actions landing
-wants to offer.
-
-```python
-from modules.central_ctf import FleetClient
-
-fleet_client = FleetClient(
-    state_path="data/central_fleet.json",
-    device_info=central.instance_info,                 # kind, device_uid, hostname, version, mode
-    status=central.collect_fleet_status,               # telemetry, see below
-    handlers={
-        "identify": lambda p: ui.banner(f"This is {central.label()}", seconds=p["seconds"]),
-        "message": lambda p: ui.banner(p["text"], seconds=300),
-        "restart": lambda p: restart.restart_project() if p["service"] == "all"
-                             else restart.restart_service(p["service"]),
-        "reset_progress": lambda p: ctf_manager.reset_progress(),
-        "collect_logs": lambda p: logs.bundle_text(),  # the text of /api/settings/logs/download
-    })
-fleet_client.start()
-```
-
-Settings page, next to the central CTF server:
-
-- **Join fleet**: server address, enrolment code (an event's join code works too), optional label.
-  Calls `fleet_client.enroll(url, code, label)`.
-- **Allowed actions**: one switch per action, all off after enrolment;
-  `fleet_client.set_allowed([...])`. Switching everything off is the kill switch; leaving the fleet
-  (`fleet_client.leave()`) ends it entirely.
-- Show `snapshot()["key_fingerprint"]` (the organiser's device page shows the same value), the
-  queue, the job history and `last_error` (`bad_signature` means somebody sent a forged job).
-- `restart` with `all` takes landing down too. The client records the job as running before it
-  starts, and reports it as done after landing comes back.
-
-Telemetry for `collect_fleet_status()`, all optional: `cybics_version`, `mode`, `hostname`,
-`services` (name → running), `host` (CPU %, memory, disk, uptime, CPU temperature from
-`/sys/class/thermal/thermal_zone0/temp`), and on a board `board` (revision, firmware version, STM32
-link state, uplink SSID, address and signal). The server stores at most 16 KB of it.
-
-What fleet management adds to the blast radius: a second outbound connection to the same server,
-a second state file, and the actions the user switched on, each with fixed parameters checked by the
-server and the handler. Nothing else, and nothing at all while no action is allowed.
+It opens no listening port, and runs nothing at all while no action is allowed.
 
 ## 2. Physical device: second Wi-Fi interface
 
@@ -276,6 +278,29 @@ the host D-Bus socket. Landing does not today, so either:
 - mount the D-Bus socket into landing as well.
 
 The first option is preferred, because landing already has a large blast radius.
+
+### The default network `cybics-mgmt`
+
+The CybICS-mgmt Raspberry Pi image (README, "Raspberry Pi Image") hosts a Wi-Fi network
+`cybics-mgmt` (password `cybics-mgmt`, 2.4 GHz) with the server at `http://10.42.0.1`, and creates the
+enrolment code `CYBICS-BOARDS`. Boards join it on their own:
+
+- **Uplink default.** The uplink profile above ships with `ssid=cybics-mgmt`, `psk=cybics-mgmt` and
+  `autoconnect=true` instead of a disabled placeholder. A board with a dongle connects whenever the
+  network is in range; the landing page can still change the network.
+- **Enrolling on its own.** When the uplink is connected to the network named `cybics-mgmt` and the
+  board is not enrolled, landing calls `client.enroll("http://10.42.0.1", "CYBICS-BOARDS")` with
+  the STM32 UID as the label suggestion. It does that only on this network, never on another one,
+  and never again after the user disconnected on purpose (remember it next to the client state).
+  Being on that network is the opt-in the invariant "no network call until the user enrols" asks
+  for; a board without a dongle, or away from the network, never calls out.
+- **Nothing else follows.** The board allows no action and joins no event by itself. The organiser
+  puts it into a team from the fleet; the user switches actions on at the board.
+- A board whose enrolment is refused (`code_disabled`, `invalid_code`) waits until the network or
+  the board restarts before it tries again, so a disabled code does not cause a stream of attempts.
+
+The network's defaults are public, like the boards' own access points. The organiser changes the
+password in `cybics-mgmt.txt` on the Pi and on the boards' landing pages together.
 
 ### LCD (optional)
 

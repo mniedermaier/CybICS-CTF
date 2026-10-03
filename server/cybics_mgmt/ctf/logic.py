@@ -552,11 +552,12 @@ def set_team_password(db, team_id, password):
 
 def submit_solve(db, auth, challenge_key, flag, client_time, remote_addr):
     """
-    Record a solve reported by an instance. Returns (result, points).
+    Record a solve a device reports for its team. Returns (result, points,
+    first blood bonus).
 
     Every call lands in the submissions audit log. The score uses the server's
-    receive time; the instance's clock is kept for information only, since an
-    instance controls it.
+    receive time; the device's clock is kept for information only, since its
+    owner controls it.
     """
     challenge_key = _text(challenge_key, "challenge_id")[:64]
     flag = _text(flag, "flag")[:256]

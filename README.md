@@ -1,6 +1,6 @@
 <p align="center">
   <img alt="CybICS Logo" src="docs/pics/CybICS_logo.png" height="120" />
-  <p align="center"><strong>mgmt</strong> &middot; The central server for CybICS: CTF events today, fleet management next.</p>
+  <p align="center"><strong>mgmt</strong> &middot; The central server for CybICS: CTF events and fleet management.</p>
 </p>
 
 ---
@@ -13,6 +13,7 @@
 [![compose](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/compose.yml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/compose.yml)
 [![CodeQL](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/codeql.yml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/codeql.yml)
 [![TruffleHog](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/trufflehog.yaml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/trufflehog.yaml)
+[![Raspberry Pi image](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/rpi-image.yml/badge.svg)](https://github.com/mniedermaier/CybICS-CTF/actions/workflows/rpi-image.yml)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/mniedermaier)
 </div>
 
@@ -24,23 +25,23 @@
 control system security. It runs virtually in Docker or on a Raspberry Pi with a custom PCB, and it
 ships with 22 capture-the-flag challenges.
 
-CybICS-mgmt is the central server for many CybICS installations. It has two parts:
+CybICS-mgmt is the central server for many CybICS installations. Each installation connects once
+from its landing page, virtual or physical alike, and becomes a **device** on the server. The server
+has two parts:
 
-- **CTF events**, ready today: many CybICS instances become **one event**.
-- **Fleet management**, in progress: every CybICS installation, virtual or physical, in one overview,
-  with telemetry and, where the device allows it, remote actions such as restarting services. The
-  design and the plan are in [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md).
+- **CTF events**: devices join teams, and many CybICS installations become **one event**. Every
+  solved challenge appears on a shared, animated scoreboard. The organiser gets one place to run the
+  workshop: teams, devices, moderation and announcements.
+- **Fleet management**: every device in one overview, across events, with telemetry and, where the
+  device allows it, remote actions such as restarting services. The design is in
+  [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md).
 
-CybICS-mgmt was called CybICS-CTF until October 2026; see [Upgrading from CybICS-CTF](#upgrading-from-cybics-ctf).
+CybICS-mgmt (called CybICS-CTF until October 2026) ships together with the CybICS release that
+replaces v1.2.4; that release has the client built in.
 
-For CTF events, CybICS-mgmt turns many CybICS instances into **one event**. Participants enrol their CybICS from its
-landing page, virtual or physical alike, and every solved challenge appears on a shared, animated
-scoreboard. The organiser gets one place to run the workshop: teams, instances, moderation and
-announcements.
-
-**It is optional.** CybICS validates flags and keeps progress locally, exactly as before. An instance
-that is never enrolled makes no network calls. An enrolled instance keeps working if the server goes
-away, and reports what it missed when the server comes back.
+**It is optional.** CybICS validates flags and keeps progress locally, exactly as before. An
+installation that is never connected makes no network calls. A connected one keeps working if the
+server goes away, and reports what it missed when the server comes back.
 
 ### Why CybICS-mgmt?
 
@@ -51,8 +52,8 @@ away, and reports what it missed when the server comes back.
   the same event; boards are recognised by their STM32 UID.
 - ✅ **Built for a classroom**: one NAT address for everybody, a participant trying to disrupt the
   event, a flaky Wi-Fi. None of these lock out honest teams or lose solves.
-- ✅ **Moderation with evidence**: void a solve, revoke an instance, disqualify a team. Nothing is
-  deleted, and every organiser action is logged.
+- ✅ **Moderation with evidence**: void a solve, take a device out of the event, disqualify a team.
+  Nothing is deleted, and every organiser action is logged.
 - ✅ **Optional first blood bonus**: a percentage of a challenge's points for the first team to solve it.
 - ✅ **Hardened by default**: two read-only containers without capabilities, a buffering nginx in
   front, a strict Content Security Policy, CSRF protection everywhere.
@@ -65,8 +66,8 @@ away, and reports what it missed when the server comes back.
 - [Screenshots](#screenshots)
 - [Status](#status)
 - [Quick Start](#-quick-start)
+- [Raspberry Pi Image](#-raspberry-pi-image)
 - [Running an Event](#-running-an-event)
-- [Upgrading from CybICS-CTF](#upgrading-from-cybics-ctf)
 - [Configuration](#%EF%B8%8F-configuration)
 - [How It Works](#-how-it-works)
 - [Documentation](#documentation)
@@ -109,10 +110,12 @@ scoreboard URL to pin one on a projector.
 |---|---|
 | CTF: API, admin UI, scoreboard, moderation, audit | ✅ Ready |
 | Reference client (`client/cybics_mgmt_client.py`) | ✅ Ready, tested on Python 3.9 and 3.12 |
-| CybICS landing page: **Settings → Central CTF server** | ✅ In CybICS v1.2.4 |
-| CybICS Raspberry Pi: second Wi-Fi interface for the uplink | ✅ In CybICS v1.2.4 |
-| Fleet: device overview across events, groups, enrolment codes | ✅ Ready; CTF-only devices show what their CTF heartbeat reports |
-| Fleet: remote actions on devices that allow them | ✅ Server and client ready; 🚧 the landing side is specified in [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#fleet-management) |
+| Fleet: device overview across events, groups, enrolment codes, putting devices into teams | ✅ Ready |
+| Fleet: remote actions on devices that allow them | ✅ Server and client ready |
+| CybICS landing page: **Settings → CybICS-mgmt** | 🚧 Moving to `MgmtClient` for the CybICS release that replaces v1.2.4; specified in [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#1-landing-service-virtual-and-physical) |
+| CybICS Raspberry Pi: second Wi-Fi interface for the uplink | ✅ In CybICS v1.2.4 (USB Wi-Fi dongle) |
+| Raspberry Pi image of CybICS-mgmt with the `cybics-mgmt` access point | ✅ Built by CI, attached to every release |
+| CybICS boards joining `cybics-mgmt` on their own | 🚧 Specified in [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#the-default-network-cybics-mgmt) |
 
 ---
 
@@ -142,9 +145,11 @@ on first start; read it with `docker compose exec server cat /data/admin_passwor
 2. **Import the challenges**: on the event's *Challenges* page, upload CybICS'
    `software/landing/ctf_config.json`. Only a hash of each flag is stored.
 3. **Optional**: set a **first blood bonus** in the event settings, for example 10 %.
-4. **Let teams join**: participants enter the server address, the join code, a team name and a team
-   password in their CybICS. A new team needs a password of at least 8 characters that is not a
-   well-known one. Teammates enter the same team name and password on their own CybICS.
+4. **Let teams join**: in *Settings → CybICS-mgmt* of their CybICS, participants connect with the
+   server address and the join code, then join a team with the join code, a team name and a team
+   password. A new team needs a password of at least 8 characters that is not a well-known one.
+   Teammates enter the same team name and password on their own CybICS. You can also put a device
+   into a team yourself, from its page in the *Fleet*.
 5. **Press Start.** Solves only count while the event is running. *Pause*, *Resume* and *Finish*
    follow, and a finished event can be reopened.
 6. **Put the scoreboard on the projector**: `http://<host>:8000/scoreboard/<slug>`, in full screen.
@@ -162,18 +167,56 @@ The containers' root filesystems are read-only, so the catalog is piped in on st
 
 ---
 
+## 📦 Raspberry Pi Image
+
+For a classroom without any infrastructure, CybICS-mgmt runs on a Raspberry Pi 3, 4, 5 or Zero 2 W
+that also hosts the Wi-Fi network. Every release has the SD card image attached
+(`*-CybICS-mgmt.img.xz`).
+
+| | Default |
+|---|---|
+| Wi-Fi network | `cybics-mgmt`, password `cybics-mgmt`, 2.4 GHz, channel 6 |
+| Web interface | `http://10.42.0.1` or `http://cybics-mgmt.local` |
+| Admin password | generated at the first start and shown on the console (HDMI) |
+| Enrolment code for CybICS boards | `CYBICS-BOARDS` |
+| SSH | `pi` / `raspberry` |
+
+1. Write the image to an SD card (`xzcat *-CybICS-mgmt.img.xz | sudo dd of=/dev/sdX bs=4M
+   conv=fsync status=progress`, or Raspberry Pi Imager under "Use custom").
+2. Before the first boot, open the card's boot partition on any computer and edit `cybics-mgmt.txt`:
+   Wi-Fi name, **password** and **country**, the admin password, the boards' enrolment code. It is
+   read at every boot, and the console lists any value it could not use.
+3. Boot the Pi. The first boot loads the containers and takes a few minutes.
+4. Join the Wi-Fi with a laptop and open `http://10.42.0.1/admin`.
+
+**The default network.** CybICS boards with a USB Wi-Fi dongle look for `cybics-mgmt`. As soon as it
+is in range they connect and enrol with the code `CYBICS-BOARDS`, and show up in the fleet. If you
+change the network's name or password, or the code, change them on the boards too. Disable the code
+under *Fleet → Groups & codes* to stop boards from enrolling on their own. (The board side is part of
+the CybICS release that replaces v1.2.4.)
+
+The defaults are public, like the CybICS boards' own. Change the Wi-Fi password and the `pi`
+password before the Pi goes on any network you care about. The access point also forwards to the
+Pi's Ethernet port if it is connected.
+
+Build the image yourself with `image/build.sh` (Docker with buildx; on an x86 host also qemu for
+arm64). The release workflow builds it natively on an arm64 runner.
+
+---
+
 ## 🎯 Running an Event
 
 ### During the event
 
-- **Instances** shows every enrolled CybICS with its team, kind (virtual or physical), version,
-  service health and last check-in. Revoked instances are hidden unless you ask for them.
+- **Instances** shows every device in the event with its team, kind (virtual or physical), version,
+  service health and last check-in. Devices that left are hidden unless you ask for them.
 - **Solves & audit** lists every solve, with filters and CSV exports. *Suspicious activity* shows
   wrong flags and wrong team passwords. An unmodified CybICS never sends a wrong flag, so one there
   means somebody is calling the API directly.
-- **Moderation**: **void** a solve (it stops scoring but stays on record), **revoke** an instance,
-  **disqualify** a team. Several teams can be handled at once on the *Teams* page.
-- **Announcements** reach every enrolled landing page within one heartbeat (30 s).
+- **Moderation**: **void** a solve (it stops scoring but stays on record), **revoke** a device's
+  membership (it leaves the event), **disqualify** a team. Several teams can be handled at once on
+  the *Teams* page.
+- **Announcements** reach every landing page in the event within one heartbeat (30 s).
 - **Log** keeps every organiser action, from the web UI and the command line.
 
 ### The fleet
@@ -181,20 +224,20 @@ The containers' root filesystems are read-only, so the catalog is piped in on st
 *Fleet* lists every CybICS installation the server knows, across events: online state, version (with
 an *outdated* marker against the newest in the fleet), service health, group and CTF team.
 
-- Installations that enrolled in an event show up automatically, marked *CTF only*: CybICS v1.2.4
-  has no fleet support yet, so they report what their CTF heartbeat says and offer no actions.
+- Every installation that connects shows up here, whether it takes part in an event or not.
 - **Groups** (a room, a set of boards) and **enrolment codes** are on *Fleet → Groups & codes*. A
-  device that enrols with a code lands in its group; an event's join code works too.
+  device that connects with a code lands in its group; an event's join code works too.
+- **Put a device into a team** from its page, without the team password, or take it out of its
+  event. The device follows within one heartbeat.
 - Give boards a **label** that matches the sticker on them, and **retire** devices you no longer use.
-  Nothing is deleted.
+  Retiring ends the device's event membership. Nothing is deleted.
 - Two devices reporting the same board UID are flagged, never merged: the UID is broadcast in the
   board's SSID and can be copied.
 - **Remote actions** on devices that allow them: identify (a banner with the label), a message,
   restart services, reset the local CTF progress, collect logs. Send them from a device's page, or
   to several devices at once from the list. Each device decides which actions it allows, all off by
   default, and runs only jobs signed with the key it pinned when it enrolled. Every job, its result
-  and every organiser action are on the *Fleet log*. This needs a CybICS release with fleet support
-  ([docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#fleet-management)).
+  and every organiser action are on the *Fleet log*.
 
 ### Locked out?
 
@@ -254,40 +297,10 @@ iptables -I DOCKER-USER -p tcp --dport 8000 --syn -m connlimit --connlimit-above
 
 ---
 
-## Upgrading from CybICS-CTF
-
-The rename keeps deployed CybICS releases working: the API, the `service` value they check and every
-answer are unchanged. Existing installations need one step, because the Compose project now has a
-fixed name and with it a new volume, `cybics-mgmt_data`. The old one is named after the directory
-CybICS-CTF was checked out into, usually `cybics-ctf_ctf-data` (`docker volume ls` shows it):
-
-```bash
-cd /path/to/CybICS-CTF && docker compose down          # stop the old stack (keeps its volume)
-git pull                                               # or clone CybICS-mgmt
-docker volume create cybics-mgmt_data
-docker run --rm -v cybics-ctf_ctf-data:/from:ro -v cybics-mgmt_data:/to alpine cp -a /from/. /to/
-docker compose up -d --build
-```
-
-On its first start the server moves `cybics-ctf.sqlite` to `cybics-mgmt.sqlite` and logs it. The
-admin password, the session key, every event and every enrolled instance carry over. The old volume
-stays as it was; remove it with `docker volume rm cybics-ctf_ctf-data` once you are happy.
-
-Also renamed, with the old names still accepted:
-
-- settings: `MGMT_*` instead of `CTF_*`;
-- the CLI: `flask --app cybics_mgmt` instead of `flask --app cybics_ctf`;
-- the Compose service: `server` instead of `ctf-server` (`docker compose exec server ...`). This one
-  has no alias, so update scripts that call `ctf-server`;
-- backups: `cybics-mgmt-*.sqlite`; `--keep` also prunes the old `cybics-ctf-*` files.
-
----
-
 ## ⚙️ Configuration
 
 Every setting can be passed in the shell or in a `.env` file next to `docker-compose.yml`. Start from
-the commented example; `.env` itself is gitignored. The `CTF_*` names from before the rename still
-work when the `MGMT_*` name is not set:
+the commented example; `.env` itself is gitignored:
 
 ```bash
 cp .env.example .env
@@ -300,13 +313,14 @@ cp .env.example .env
 | `MGMT_SECRET_KEY` | generated | Session key, at least 16 characters. If unset, generated and kept in `/data/secret_key`. |
 | `MGMT_SERVER_NAME` | `CybICS-mgmt` | Shown in the UI and returned by `/api/v1/info`. |
 | `MGMT_PUBLIC_URL` | none | Where organisers reach the server, e.g. `https://mgmt.example.org`; used in the links `login-link` prints. |
-| `MGMT_HEARTBEAT_INTERVAL` | `30` | Seconds between instance check-ins; the server tells the clients. |
-| `MGMT_ONLINE_WINDOW` | `90` | An instance counts as online if it checked in within this many seconds. |
-| `MGMT_RATE_ENROLL` | `60` | Wrong team passwords per address per minute before enrolment from it pauses. `0` switches the guard off. |
+| `MGMT_HEARTBEAT_INTERVAL` | `30` | Seconds between device check-ins; the server tells the clients. |
+| `MGMT_ONLINE_WINDOW` | `90` | A device counts as online if it checked in within this many seconds. |
+| `MGMT_RATE_JOIN` | `60` | Wrong team passwords per address per minute before joining teams from it pauses. `0` switches the guard off. |
 | `MGMT_RATE_NEW_TEAMS` | `100` | New teams one address may create per 10 minutes. Only teams actually created count. |
-| `MGMT_RATE_ENROL_CODE` | `60` | Unknown fleet enrolment codes per address per minute before fleet enrolment from it pauses. |
-| `MGMT_RATE_NEW_DEVICES` | `100` | New fleet devices one address may enrol per 10 minutes. Only devices actually created count. |
-| `MGMT_RATE_HEARTBEAT` / `MGMT_RATE_SOLVE` | `30` | Requests per instance per minute. |
+| `MGMT_RATE_ENROL_CODE` | `60` | Unknown enrolment codes per address per minute before connecting from it pauses. |
+| `MGMT_RATE_NEW_DEVICES` | `100` | New devices one address may enrol per 10 minutes. Only devices actually created count. |
+| `MGMT_DEFAULT_ENROL_CODE` | none | An enrolment code created at start if it is missing, for CybICS boards that enrol on their own (the Raspberry Pi image sets `CYBICS-BOARDS`). A code the organiser disabled stays disabled. |
+| `MGMT_RATE_HEARTBEAT` / `MGMT_RATE_SOLVE` | `30` | Requests per device per minute. |
 | `MGMT_RATE_LOGIN` | `10` | Failed admin logins per address per 5 minutes. |
 | `MGMT_ADMIN_SESSION_HOURS` | `12` | Admin sessions end after this many hours, on log out, or when the admin password changes. |
 | `MGMT_BIND` / `MGMT_PORT` | `0.0.0.0` / `8000` | Where the stack's port is published. |
@@ -326,17 +340,18 @@ Outside Docker Compose, `MGMT_TRUST_PROXY=1`, `MGMT_FORWARDED_ALLOW_IPS` (the pr
 ```
  participants                                                         organiser
 ┌────────────────────────┐   POST /api/v1/enroll     (once)        ┌──────────────────────┐
-│ CybICS (Docker)        │   POST /api/v1/heartbeat  (every 30 s)  │  proxy (nginx)       │
+│ CybICS (Docker)        │   POST /api/v1/ctf/join   (per event)   │  proxy (nginx)       │
 │  landing ─ client ─────┼──────────────────────────────────────►  │   └─ server          │
-└────────────────────────┘   POST /api/v1/solves     (each solve)  │      Flask + SQLite  │
-┌────────────────────────┐                                         │                      │
+└────────────────────────┘   POST /api/v1/heartbeat  (every 30 s)  │      Flask + SQLite  │
+┌────────────────────────┐   POST /api/v1/solves     (each solve)  │                      │
 │ CybICS (Pi + PCB)      │                                         │  /admin              │
 │  landing ─ client ─────┼── wlan1 (USB dongle) ─────────────────► │  /scoreboard/<slug>  │
 └────────────────────────┘                                         └──────────────────────┘
 ```
 
-- **Enrol once, then report.** An instance enrols with the join code, a team name and password, and
-  gets a token. From then on it sends a heartbeat every 30 s (status, version, service health) and
+- **Connect once, then join a team.** An installation connects with a code and becomes a device
+  with a token. It joins a team with the join code, a team name and password, or the organiser puts
+  it into one. From then on it sends a heartbeat every 30 s (status, version, service health) and
   reports each solve its landing page has already validated locally.
 - **Nothing gets lost.** Reports wait in a persistent outbox while the server is unreachable. Every
   heartbeat compares the local solves with the server's record and resends what is missing.
@@ -344,7 +359,7 @@ Outside Docker Compose, `MGMT_TRUST_PROXY=1`, `MGMT_FORWARDED_ALLOW_IPS` (the pr
   and ties go to the team that reached the score first.
 - **Honest about cheating.** CybICS flags are the same in every installation and printed in the
   training material, so no server can *prove* a solve. CybICS-mgmt makes honest play the easy path and
-  dishonest play visible: enrolled instances only, an audit of every submission, wrong flags flagged,
+  dishonest play visible: enrolled devices only, an audit of every submission, wrong flags flagged,
   and moderation that keeps the evidence.
 
 The full design, the sync protocol and the trust model are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -355,20 +370,21 @@ The full design, the sync protocol and the trust model are in [docs/ARCHITECTURE
 
 | Document | |
 |---|---|
-| [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md) | CybICS-mgmt: the fleet design, its decisions and the plan, the rename's compatibility rules |
+| [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md) | CybICS-mgmt: the fleet design, its decisions and the plan |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | What the investigation of CybICS found, the design, the sync protocol, the trust model, shared-address handling |
-| [docs/API.md](docs/API.md) | The instance API (`/api/v1`): enrolment, heartbeat, solves, scoreboard |
-| [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md) | The changes needed in CybICS: landing settings page, the Pi's second Wi-Fi interface, network isolation |
+| [docs/API.md](docs/API.md) | The device API (`/api/v1`): enrolment, heartbeat, joining a team, solves, jobs, scoreboard |
+| [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md) | The changes needed in CybICS: the landing settings section and job handlers, the Pi's second Wi-Fi interface, network isolation |
 | [CLAUDE.md](CLAUDE.md) | Conventions and invariants for contributors and AI assistants |
 
 ### Repository layout
 
 | Path | |
 |---|---|
-| `server/` | The Flask application (`cybics_mgmt/`, with the CTF part in `cybics_mgmt/ctf/`), its Dockerfile and the test suite |
-| `client/cybics_mgmt_client.py` | Reference client for CybICS' landing page: one file, standard library only |
-| `proxy/` | nginx in front of the app: request buffering, short timeouts, enrolment queue, real client address |
-| `tools/slowloris_check.py` | Checks that one abusive client cannot freeze the server (slow uploads, idle connections, enrolment flood) |
+| `server/` | The Flask application (`cybics_mgmt/`, with the CTF part in `cybics_mgmt/ctf/` and the fleet in `cybics_mgmt/fleet/`), its Dockerfile and the test suite |
+| `client/cybics_mgmt_client.py` | Reference client for CybICS' landing page (`MgmtClient`): one file, standard library only |
+| `proxy/` | nginx in front of the app: request buffering, short timeouts, the queue for enrolments and joins, real client address |
+| `tools/slowloris_check.py` | Checks that one abusive client cannot freeze the server (slow uploads, idle connections, join flood) |
+| `image/` | The Raspberry Pi image: pi-gen (submodule), its stage with the access point and the containers, `build.sh` |
 | `docs/` | Architecture, API, CybICS integration, pictures |
 
 ---
@@ -388,7 +404,7 @@ flask --app cybics_mgmt run --debug      # data goes to ./data
 ```
 
 The suite covers the API, the admin UI, the CLI, the migrations and the reference client against a
-live server: outages, reconciliation, pauses, late catalogs, revocation and stale answers. CI also runs
+live server: outages, reconciliation, pauses, late catalogs, removal from the event and stale answers. CI also runs
 the client on Python 3.9 and checks the hardened Docker stack against
 `tools/slowloris_check.py`.
 
