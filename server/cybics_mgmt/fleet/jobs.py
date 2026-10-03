@@ -104,8 +104,6 @@ def why_not(device, action, signer_fingerprint):
 
 def device_problem(device, signer_fingerprint):
     """None if the device can take jobs at all, else the reason."""
-    if device["legacy"]:
-        return "the device runs a CybICS release without fleet support"
     if device["retired"]:
         return "the device is retired"
     if not device["key_fingerprint"]:

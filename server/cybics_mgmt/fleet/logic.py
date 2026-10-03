@@ -2,13 +2,9 @@
 Fleet domain logic: devices, groups and enrolment codes.
 
 A device is one CybICS installation, a virtual stack on a laptop or one
-board, and the lasting identity in the fleet (docs/MGMT_DESIGN.md). It is
-never deleted, only retired. Devices come from two places:
-
-- the fleet API (/api/v1/fleet/enroll): a native device with its own token;
-- a CTF enrolment of a client that knows nothing of the fleet: the instance
-  gets a *legacy* device, which mirrors the instance's status and offers no
-  actions.
+board (docs/MGMT_DESIGN.md). It is the only identity: it enrols once with an
+enrolment code or an event's join code, and its token authenticates every API
+call, CTF ones included. It is never deleted, only retired.
 
 Kept free of request handling, like ctf/logic.py; every function takes the
 connection explicitly. Nothing here imports the CTF part.
@@ -114,50 +110,12 @@ def resolve_code(db, code):
     raise FleetError("invalid_code", "Unknown enrolment code.", 404)
 
 
-# ---------- legacy devices (CTF instances of fleet-unaware clients) ----------
-
-def create_legacy_device(db, device_id, info, remote_addr):
-    """A device for a CTF instance whose client knows nothing of the fleet. Call inside a transaction."""
-    ts = now()
-    db.execute("""
-        INSERT INTO devices (id, kind, device_uid, hostname, cybics_version, mode, remote_addr,
-                             legacy, enrolled_at, last_seen)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
-               (device_id, info["kind"], info["device_uid"], info["hostname"], info["cybics_version"],
-                info["mode"], remote_addr, ts, ts))
-    return device_id
-
-
-def legacy_device_for(db, device_id):
-    """`device_id` if it names a legacy device still in service, else None."""
-    if not device_id:
-        return None
-    row = db.execute("SELECT id FROM devices WHERE id = ? AND legacy = 1 AND retired = 0",
-                     (device_id,)).fetchone()
-    return row["id"] if row else None
-
-
-def refresh_legacy_device(db, device_id, info, remote_addr):
-    """A legacy device enrolled again (a board re-enrolling in its team): take the new identity."""
-    db.execute("""UPDATE devices SET hostname = ?, cybics_version = ?, mode = ?, remote_addr = ?, last_seen = ?
-                  WHERE id = ? AND legacy = 1""",
-               (info["hostname"], info["cybics_version"], info["mode"], remote_addr, now(), device_id))
-
-
-def mirror_legacy_status(db, device_id, status_json, version, mode, remote_addr):
-    """A CTF heartbeat of a legacy device. Native devices report through the fleet API instead."""
-    db.execute("""UPDATE devices SET last_seen = ?, remote_addr = ?, status_json = COALESCE(?, status_json),
-                      cybics_version = COALESCE(?, cybics_version), mode = COALESCE(?, mode)
-                  WHERE id = ? AND legacy = 1""",
-               (now(), remote_addr, status_json, version, mode, device_id))
-
-
-# ---------- native devices ----------
+# ---------- devices ----------
 
 def enroll_device(db, code, info, label, remote_addr):
     """
-    Enrol a device through the fleet API. Returns (device_id, token, device);
-    the token is shown exactly once, only its hash is stored.
+    Enrol a device. Returns (device_id, token, device); the token is shown
+    exactly once, only its hash is stored.
     """
     target = resolve_code(db, code)
     info = device_input.device_info(info, lambda message: FleetError("invalid_device", message), "device")
@@ -200,8 +158,10 @@ def record_device_heartbeat(db, device_id, status, remote_addr):
 
 
 def leave(db, device_id):
-    """The user switched fleet management off on the device."""
-    db.execute("UPDATE devices SET retired = 1, retired_reason = 'left' WHERE id = ?", (device_id,))
+    """The user disconnected the device from the server. Its live CTF instance ends with it."""
+    with transaction(db):
+        db.execute("UPDATE devices SET retired = 1, retired_reason = 'left' WHERE id = ?", (device_id,))
+        db.execute("UPDATE instances SET revoked = 1 WHERE device_id = ? AND revoked = 0", (device_id,))
 
 
 # ---------- organiser ----------
@@ -220,18 +180,24 @@ def update_device(db, device_id, label, group_id, notes):
 
 
 def set_retired(db, device_id, retired):
-    """Retire (its token stops working, it leaves the list) or bring back a device."""
-    db.execute("UPDATE devices SET retired = ?, retired_reason = ? WHERE id = ?",
-               (int(bool(retired)), "organiser" if retired else None, device_id))
+    """
+    Retire (its token stops working, it leaves the list and its CTF instance
+    ends) or bring back a device. Bringing it back does not rejoin the event.
+    """
+    with transaction(db):
+        db.execute("UPDATE devices SET retired = ?, retired_reason = ? WHERE id = ?",
+                   (int(bool(retired)), "organiser" if retired else None, device_id))
+        if retired:
+            db.execute("UPDATE instances SET revoked = 1 WHERE device_id = ? AND revoked = 0", (device_id,))
 
 
 def device_instances(db, device_id):
     """The device's CTF participations, newest first."""
     return db.execute("""
-        SELECT i.id, i.revoked, i.enrolled_at, i.last_seen, t.id AS team_id, t.name AS team,
+        SELECT i.id, i.revoked, i.joined_at, i.joined_by, t.id AS team_id, t.name AS team,
                e.id AS event_id, e.name AS event
         FROM instances i JOIN teams t ON t.id = i.team_id JOIN events e ON e.id = t.event_id
-        WHERE i.device_id = ? ORDER BY i.enrolled_at DESC LIMIT 50""", (device_id,)).fetchall()
+        WHERE i.device_id = ? ORDER BY i.joined_at DESC LIMIT 50""", (device_id,)).fetchall()
 
 
 def version_key(version):
@@ -246,8 +212,7 @@ def list_devices(db, online_since, group_id=None, kind=None, include_gone=False)
     """
     Devices for the fleet page, newest check-in first, with derived fields:
 
-    - state: "online", "offline", or "gone" (retired, or a legacy device whose
-      CTF instance was revoked or deleted);
+    - state: "online", "offline", or "gone" (retired);
     - ctf: "team · event" of its live CTF instance, if any;
     - uid_devices: other devices in service claiming the same board UID
       (a hint that they are the same board, never acted on);
@@ -257,16 +222,14 @@ def list_devices(db, online_since, group_id=None, kind=None, include_gone=False)
         SELECT d.*, g.name AS group_name,
             (SELECT t.name || ' · ' || e.name FROM instances i JOIN teams t ON t.id = i.team_id
              JOIN events e ON e.id = t.event_id WHERE i.device_id = d.id AND i.revoked = 0
-             ORDER BY i.enrolled_at DESC LIMIT 1) AS ctf,
-            EXISTS (SELECT 1 FROM instances i WHERE i.device_id = d.id AND i.revoked = 0) AS live_instance
+             ORDER BY i.joined_at DESC LIMIT 1) AS ctf
         FROM devices d LEFT JOIN device_groups g ON g.id = d.group_id
         WHERE (:group IS NULL OR d.group_id = :group) AND (:kind IS NULL OR d.kind = :kind)
         ORDER BY d.last_seen DESC LIMIT 2000""", {"group": group_id, "kind": kind}).fetchall()
     devices = []
     for row in rows:
         device = dict(row)
-        gone = device["retired"] or (device["legacy"] and not device["live_instance"])
-        device["state"] = "gone" if gone else ("online" if (device["last_seen"] or 0) >= online_since
+        device["state"] = "gone" if device["retired"] else ("online" if (device["last_seen"] or 0) >= online_since
                                               else "offline")
         status = device_input.parse_status(device["status_json"])
         services = status.get("services") if isinstance(status.get("services"), dict) else {}

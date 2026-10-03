@@ -1,11 +1,11 @@
 """
 CybICS-mgmt: the optional central server for CybICS.
 
-An optional companion to CybICS (https://github.com/mniedermaier/CybICS). It
-runs CTF events: virtual and physical CybICS instances that the user enrols
-from the landing page report their team, status and solves here, and the
-organiser runs a shared scoreboard. A CybICS instance never needs this server
-to work.
+An optional companion to CybICS (https://github.com/mniedermaier/CybICS).
+CybICS installations, virtual and physical, enrol as devices from their
+landing page. The organiser sees and manages them in the fleet, and runs CTF
+events in which devices report their team's solves to a shared scoreboard. A
+CybICS installation never needs this server to work.
 """
 import logging
 import os
@@ -22,27 +22,15 @@ __version__ = "0.1.0"
 log = logging.getLogger("cybics_mgmt")
 
 ENV_PREFIX = "MGMT_"
-# Settings were called CTF_* before the rename to CybICS-mgmt; still honoured.
-LEGACY_ENV_PREFIX = "CTF_"
-_warned_legacy = set()
 
 
 def env(name, default=None):
     """
-    The setting MGMT_<name>, else the pre-rename CTF_<name> (logged once as
-    deprecated), else `default`. Blank values count as unset, as they do in
-    docker compose files that pass every variable through.
+    The setting MGMT_<name>, else `default`. Blank values count as unset, as
+    they do in docker compose files that pass every variable through.
     """
     value = os.environ.get(ENV_PREFIX + name)
-    if value is not None and value.strip():
-        return value
-    value = os.environ.get(LEGACY_ENV_PREFIX + name)
-    if value is not None and value.strip():
-        if name not in _warned_legacy:
-            _warned_legacy.add(name)
-            log.warning("%s%s is deprecated; rename it to %s%s", LEGACY_ENV_PREFIX, name, ENV_PREFIX, name)
-        return value
-    return default
+    return value if value is not None and value.strip() else default
 
 
 def _env_int(name, default):
@@ -119,7 +107,7 @@ def create_app(test_config=None):
         # (hits, seconds) per key. All per-address limits count failures only;
         # see "Shared addresses" in docs/ARCHITECTURE.md.
         # Wrong team passwords per address per minute; 0 switches it off.
-        RATE_LIMIT_ENROLL=(_env_int("RATE_ENROLL", 60), 60),
+        RATE_LIMIT_JOIN=(_env_int("RATE_JOIN", 60), 60),
         RATE_LIMIT_HEARTBEAT=(_env_int("RATE_HEARTBEAT", 30), 60),
         RATE_LIMIT_SOLVE=(_env_int("RATE_SOLVE", 30), 60),
         RATE_LIMIT_LOGIN=(_env_int("RATE_LOGIN", 10), 300),

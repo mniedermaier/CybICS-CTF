@@ -1,5 +1,5 @@
 """
-FleetClient (client/cybics_mgmt_client.py) against a real HTTP server: it runs
+MgmtClient's device side (client/cybics_mgmt_client.py) against a real HTTP server: it runs
 a job only when it is signed with the pinned key, newer than the last one, and
 allowed on the device; it executes nothing but the handlers landing registers.
 """
@@ -15,7 +15,7 @@ from cybics_mgmt.db import get_db
 from cybics_mgmt.fleet import jobs
 from cybics_mgmt.fleet import logic as fleet
 from cybics_mgmt.fleet.signing import Signer, _load, get_signer
-from cybics_mgmt_client import CTFClientError, FleetClient, _pinned_key, verify_signature
+from cybics_mgmt_client import MgmtClient, MgmtClientError, _pinned_key, verify_signature
 
 LAPTOP = {"kind": "virtual", "hostname": "laptop-7", "cybics_version": "1.2.4", "mode": "full"}
 
@@ -40,6 +40,7 @@ class Landing:
 
     def __init__(self):
         self.calls = []
+        self.solved = []
 
     def handler(self, action, result=None):
         def run(params):
@@ -51,9 +52,9 @@ class Landing:
 
     def client(self, path, **results):
         handlers = {a: self.handler(a, results.get(a, "ok")) for a in jobs.ACTIONS}
-        return FleetClient(str(path), device_info=lambda: dict(LAPTOP),
-                           status=lambda: {"cybics_version": "1.2.4", "services": {"landing": True}},
-                           handlers=handlers)
+        return MgmtClient(str(path), device_info=lambda: dict(LAPTOP),
+                          status=lambda: {"cybics_version": "1.2.4", "services": {"landing": True}},
+                          local_solves=lambda: self.solved, handlers=handlers)
 
 
 def enrolled(landing, tmp_path, server, code, allowed=tuple(jobs.ACTIONS), **results):
@@ -79,7 +80,7 @@ def job_state(app, job_id):
 # ---------- enrolment ----------
 
 def test_disabled_fleet_client_does_nothing(tmp_path):
-    client = FleetClient(str(tmp_path / "fleet.json"))
+    client = MgmtClient(str(tmp_path / "fleet.json"))
     assert client.sync_once() is False and not client.run_next_job()
     assert not (tmp_path / "fleet.json").exists()
 
@@ -95,7 +96,7 @@ def test_enrolment_pins_the_key_and_allows_nothing(app, server, code, tmp_path):
 
 
 def test_set_allowed_keeps_only_actions_with_a_handler(tmp_path):
-    client = FleetClient(str(tmp_path / "fleet.json"), handlers={"identify": lambda p: "", "shell": print})
+    client = MgmtClient(str(tmp_path / "fleet.json"), handlers={"identify": lambda p: "", "shell": print})
     assert client.set_allowed(["identify", "shell", "restart"]) == ["identify"]
 
 
@@ -319,11 +320,11 @@ def test_an_unreachable_server_is_retried_quietly(tmp_path, code, server):
 
 def test_enrolment_errors_reach_the_user(server, tmp_path):
     client = Landing().client(tmp_path / "fleet.json")
-    with pytest.raises(CTFClientError) as err:
+    with pytest.raises(MgmtClientError) as err:
         client.enroll(server, "WRONG123")
     assert err.value.code == "invalid_code"
-    broken = FleetClient(str(tmp_path / "f.json"), device_info=lambda: 1 / 0)
-    with pytest.raises(CTFClientError) as err:
+    broken = MgmtClient(str(tmp_path / "f.json"), device_info=lambda: 1 / 0)
+    with pytest.raises(MgmtClientError) as err:
         broken.enroll(server, "WRONG123")
     assert err.value.code == "device_info"
 
@@ -342,3 +343,26 @@ def test_the_threads_run_jobs_without_help(app, server, code, tmp_path):
     finally:
         client.stop()
     assert landing.calls == [("identify", {"seconds": 60})]
+
+
+# ---------- the organiser moves the device ----------
+
+def test_the_client_follows_the_organiser_into_and_out_of_a_team(app, server, code, tmp_path):
+    from cybics_mgmt.ctf import logic as ctf
+    landing = Landing()
+    landing.solved = ["physical_process"]               # old progress: the baseline
+    client = enrolled(landing, tmp_path, server, code)
+    with app.app_context():
+        db = get_db()
+        event = ctf.create_event(db, "assigned", "Assigned")
+        team = ctf.create_team(db, event["id"], "Blue Team", "blue-pass-1")
+        ctf.assign(db, fleet.get_device(db, client.state["device_id"]), team["id"])
+    assert client.sync_once()
+    view = client.snapshot()["ctf"]
+    assert view["joined"] and view["team"]["name"] == "Blue Team" and view["event"]["slug"] == "assigned"
+    assert client.state["ctf"]["baseline"] == ["physical_process"]
+    with app.app_context():
+        ctf.leave(get_db(), client.state["device_id"])
+    assert client.sync_once()
+    assert client.snapshot()["ctf"]["joined"] is False and client.snapshot()["ctf"]["removed"] is True
+

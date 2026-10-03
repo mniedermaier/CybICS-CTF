@@ -77,12 +77,38 @@ def event(app):
         return dict(ctf.get_event(db, event["id"]))
 
 
-def enroll(client, event, team="Red Team", password="secret-12", **instance):
+class Joined:
+    """What enroll() returns: the join's answer, with the device's token and id added."""
+
+    def __init__(self, resp, extra):
+        self.status_code = resp.status_code
+        self.data = resp.data
+        self._json = {**(resp.get_json(silent=True) or {}), **extra}
+
+    def get_json(self):
+        return self._json
+
+
+def enroll_device(client, code, **instance):
     info = {"kind": "virtual", "hostname": "laptop", "cybics_version": "1.2.3", "mode": "full"}
     info.update(instance)
-    return client.post("/api/v1/enroll", json={
-        "join_code": event["join_code"], "team_name": team, "team_password": password,
-        "instance": info})
+    return client.post("/api/v1/enroll", json={"code": code, "device": info})
+
+
+def join(client, token, event, team="Red Team", password="secret-12"):
+    return client.post("/api/v1/ctf/join", headers=auth(token), json={
+        "join_code": event["join_code"], "team_name": team, "team_password": password})
+
+
+def enroll(client, event, team="Red Team", password="secret-12", token=None, **instance):
+    """A new device (enrolled with the event's join code) that joins `team`; `token` reuses a device."""
+    device_id = None
+    if token is None:
+        device = enroll_device(client, event["join_code"], **instance)
+        if device.status_code != 201:
+            return device
+        token, device_id = device.get_json()["token"], device.get_json()["device_id"]
+    return Joined(join(client, token, event, team, password), {"token": token, "device_id": device_id})
 
 
 @pytest.fixture

@@ -5,12 +5,7 @@
 {% block content %}
 <h1>{{ name }}
   {% if device.retired %}<span class="badge">retired</span>
-  {% elif online %}<span class="badge ok">online</span>{% else %}<span class="badge warn">offline</span>{% endif %}
-  {% if device.legacy %}<span class="badge">CTF only</span>{% endif %}</h1>
-{% if device.legacy %}
-<div class="flash">This device is known through a CTF enrolment of a CybICS release without fleet support. It is shown with
-  what its CTF heartbeat reports; actions need a CybICS release with fleet support.</div>
-{% endif %}
+  {% elif online %}<span class="badge ok">online</span>{% else %}<span class="badge warn">offline</span>{% endif %}</h1>
 <div class="grid">
   <div class="panel">
     <h2>Device</h2>
@@ -119,15 +114,27 @@
 <div class="panel">
   <h2>CTF participation</h2>
   <table>
-    <thead><tr><th>Event</th><th>Team</th><th>Enrolled</th><th>Last seen</th><th></th></tr></thead>
+    <thead><tr><th>Event</th><th>Team</th><th>Joined</th><th>By</th><th></th></tr></thead>
     <tbody>
     {% for i in instances %}
       <tr class="{{ 'muted' if i.revoked }}"><td><a href="{{ url_for('admin.event', event_id=i.event_id) }}">{{ i.event }}</a></td>
-          <td>{{ i.team }}</td><td class="muted">{{ i.enrolled_at|time }}</td><td class="muted">{{ i.last_seen|ago }}</td>
-          <td>{% if i.revoked %}<span class="badge">revoked</span>{% endif %}</td></tr>
-    {% else %}<tr><td colspan="5" class="muted">Not enrolled in any event.</td></tr>{% endfor %}
+          <td>{{ i.team }}</td><td class="muted">{{ i.joined_at|time }}</td><td class="muted">{{ i.joined_by }}</td>
+          <td>{% if i.revoked %}<span class="badge">left</span>{% else %}<span class="badge ok">current</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">Never in an event.</td></tr>{% endfor %}
     </tbody>
   </table>
+  {% if not device.retired %}
+  <form method="post" action="{{ url_for('admin.device_assign', device_id=device.id) }}" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <select name="team" aria-label="Team">
+      <option value="">Put into team &hellip;</option>
+      {% for t in teams %}<option value="{{ t.id }}">{{ t.event }} &middot; {{ t.name }}</option>{% endfor %}
+      {% if instances and not instances[0].revoked %}<option value="leave">Leave the event</option>{% endif %}
+    </select>
+    <button class="secondary" type="submit">Apply</button>
+    <span class="muted">No team password needed. Teams are created on the event's Teams page.</span>
+  </form>
+  {% endif %}
 </div>
 <div class="panel">
   <h2>Retire</h2>

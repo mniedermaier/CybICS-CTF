@@ -1,17 +1,21 @@
 """
-The CTF endpoints of /api/v1: enrolment, heartbeat, solves, the catalog and the
-public scoreboard. The contract is documented in docs/API.md.
+The CTF endpoints of /api/v1: joining and leaving an event, solves, the
+catalog, the device's CTF state in the heartbeat answer, and the public
+scoreboard. The contract is documented in docs/API.md.
+
+Every call authenticates the device (fleet/api.py); the device's live
+instance names its team and event.
 """
 import logging
 import threading
 import time
 import unicodedata
 
-from flask import current_app, g, jsonify, request
+from flask import current_app, jsonify
 
-from ..api import bp, json_body, rate_limit
+from ..api import HEARTBEAT_PARTS, bp, json_body, rate_limit
 from ..db import get_db, now
-from ..fleet import logic as fleet
+from ..fleet.api import authenticate
 from ..security import HashingBusy, client_ip, limiter
 from . import logic as ctf
 from .logic import CTFError
@@ -19,23 +23,15 @@ from .logic import CTFError
 log = logging.getLogger("cybics_mgmt")
 
 
-def _authenticate():
-    header = request.headers.get("Authorization", "")
-    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
-    # Look the token up first (one indexed hash): a valid token is never
-    # limited, so a participant spraying garbage tokens from a shared NAT
-    # address cannot stall the honest instances behind the same address.
-    auth = ctf.authenticate_instance(get_db(), token)
+def _participation(device):
+    """The device's team and event, or the error that says why it cannot act in the CTF."""
+    auth = ctf.participation(get_db(), device["id"])
     if auth is None:
-        limit, window = current_app.config["RATE_LIMIT_BAD_TOKEN"]
-        if not limiter.hit(f"badtoken:{client_ip()}", limit, window):
-            raise CTFError("rate_limited", "Too many requests with an invalid token.", 429)
-        # 401 tells the client its enrolment is gone (revoked, event deleted)
-        # and that it should stop sending until the user re-enrols.
-        raise CTFError("unauthorized", "Unknown or revoked instance token.", 401)
+        # Revoked by the organiser, the team or event deleted, or never
+        # joined: the client keeps its queue and stops sending solves.
+        raise CTFError("not_in_event", "This device is not in an event. Join one first.", 409)
     if auth["banned"]:
         raise CTFError("team_banned", "This team has been disqualified.", 403)
-    g.auth = auth
     return auth
 
 
@@ -57,8 +53,8 @@ def _usable(value):
     return isinstance(value, str) and ctf._encodable(value)
 
 
-@bp.post("/enroll")
-def enroll():
+@bp.post("/ctf/join")
+def ctf_join():
     # Shared addresses: a whole classroom, the projector and the organiser
     # often sit behind one NAT address, so any per-address limit can be
     # tripped by one participant for everybody. The guard here only counts
@@ -66,11 +62,12 @@ def enroll():
     # it in the admin UI, and nothing depends on it for security: team
     # passwords are at least 8 characters, and the bounded scrypt pool caps
     # guessing for the whole server.
-    fail_key = f"enroll-fail:{client_ip()}"
-    limit, window = current_app.config["RATE_LIMIT_ENROLL"]
+    device = authenticate()
+    fail_key = f"join-fail:{client_ip()}"
+    limit, window = current_app.config["RATE_LIMIT_JOIN"]
     if limiter.exceeded(fail_key, limit, window):
-        if limiter.hit(f"audit-enroll-lock:{client_ip()}", 1, window):
-            log.warning("enrol: failure limit reached for %s", client_ip())
+        if limiter.hit(f"audit-join-lock:{client_ip()}", 1, window):
+            log.warning("join: failure limit reached for %s", client_ip())
         raise CTFError("rate_limited", "Too many wrong team passwords from this address. Ask the organiser.", 429)
     db = get_db()
     newteam_key = f"newteam:{client_ip()}"
@@ -78,7 +75,7 @@ def enroll():
     try:
         data = json_body()
         code, name = data.get("join_code"), data.get("team_name")
-        # Only well-formed strings reach SQLite here; enroll() turns the rest into a 400.
+        # Only well-formed strings reach SQLite here; join() turns the rest into a 400.
         event_row = ctf.get_event_by_join_code(db, code) if _usable(code) and code.strip() else None
         norm_name = unicodedata.normalize("NFC", " ".join(name.split())) if _usable(name) else ""
         # New teams per address: counted only when a team is actually created.
@@ -88,66 +85,57 @@ def enroll():
         if creating and limiter.exceeded(newteam_key, limit, window):
             raise CTFError("rate_limited", "Too many new teams from this address. Join an existing team "
                                            "or ask the organiser.", 429)
-        # A fleet-aware client sends its device token, so the instance joins
-        # its device instead of getting a legacy device of its own.
-        device_id = None
-        if data.get("device_token") is not None:
-            device = fleet.authenticate_device(db, data.get("device_token"))
-            if device is None:
-                raise CTFError("invalid_device_token", "Unknown or retired device token.", 403)
-            device_id = device["id"]
-        instance_id, token, event, team, uid_teams = ctf.enroll(
-            db, data.get("join_code"), data.get("team_name"), data.get("team_password"),
-            data.get("instance"), client_ip(), device_id=device_id)
+        instance_id, event, team, uid_teams = ctf.join(db, device, data.get("join_code"), data.get("team_name"),
+                                                       data.get("team_password"))
     except HashingBusy:
-        raise CTFError("busy", "The server is busy with other enrolments. Try again in a few seconds.",
+        raise CTFError("busy", "The server is busy with other devices joining. Try again in a few seconds.",
                        503) from None
     except CTFError as exc:
         # Only wrong team passwords count: they cost a hash. Malformed requests
         # and unknown join codes cost nothing, and counting them would let
-        # anyone switch off enrolment for a whole NAT address with garbage.
+        # anyone switch off joining for a whole NAT address with garbage.
         if exc.code == "wrong_team_password":
             limiter.record(fail_key)
-            ctf.record_failed_enrolment(db, exc.team["event_id"], exc.team["id"], exc.team["name"],
-                                        client_ip())
-            log.warning("enrol: wrong password for team %r from %s", exc.team["name"], client_ip())
+            ctf.record_failed_join(db, exc.team["event_id"], exc.team["id"], exc.team["name"], device["id"],
+                                   client_ip())
+            log.warning("join: wrong password for team %r from %s", exc.team["name"], client_ip())
         elif exc.code == "invalid_join_code":
             # Once per address and minute: enough to spot someone probing
             # codes or tripping the guard, without letting them flood the log.
             if limiter.hit(f"audit-joincode:{client_ip()}", 1, 60):
-                log.warning("enrol: unknown join code from %s", client_ip())
+                log.warning("join: unknown join code from %s", client_ip())
         elif exc.code != "rate_limited":
-            log.info("enrol refused (%s) from %s", exc.code, client_ip())
+            log.info("join refused (%s) from %s", exc.code, client_ip())
         raise
     if creating:
         limiter.record(newteam_key)
-    log.info("enrol: %s instance %s joined team %r in %s from %s", (data.get("instance") or {}).get("kind"),
-             instance_id[:8], team["name"], event["slug"], client_ip())
+    log.info("join: %s device %s joined team %r in %s from %s", device["kind"], device["id"][:8], team["name"],
+             event["slug"], client_ip())
     if uid_teams:
-        log.warning("enrol: board UID claimed by team %r is also live in team(s) %s",
+        log.warning("join: board UID claimed by team %r is also live in team(s) %s",
                     team["name"], ", ".join(repr(t) for t in uid_teams))
-    return jsonify({
-        "instance_id": instance_id,
-        "token": token,
-        "team": {"id": team["id"], "name": team["name"]},
-        "event": _event_json(event),
-        "heartbeat_interval": current_app.config["HEARTBEAT_INTERVAL"],
-    }), 201
+    return jsonify({"instance_id": instance_id, "team": {"id": team["id"], "name": team["name"]},
+                    "event": _event_json(event)}), 201
 
 
-@bp.post("/heartbeat")
-def heartbeat():
+@bp.delete("/ctf/join")
+def ctf_leave():
+    """The user left the event in the landing page. The device stays enrolled."""
+    device = authenticate()
+    ctf.leave(get_db(), device["id"])
+    return "", 204
+
+
+def heartbeat_part(db, device, data):
     """
-    Periodic check-in. Stores the instance status and answers with everything
-    the landing page needs to display: event state, team score and rank, the
-    challenges the server has on record for the team (the client resends any
-    local solve missing from that list) and new announcements.
+    The device's CTF state for the heartbeat answer: its event state, team
+    score and rank, the challenges the server has on record for the team (the
+    client resends any local solve missing from that list) and new
+    announcements. "ctf" is null while the device is in no event.
     """
-    auth = _authenticate()
-    rate_limit(f"hb:{auth['instance_id']}", "RATE_LIMIT_HEARTBEAT")
-    data = json_body()
-    db = get_db()
-    ctf.record_heartbeat(db, auth["instance_id"], data.get("status"), client_ip())
+    auth = ctf.participation(db, device["id"])
+    if auth is None:
+        return {"ctf": None}
     event = ctf.get_event(db, auth["event_id"])
     try:
         after = int(data.get("announcements_after") or 0)
@@ -155,25 +143,27 @@ def heartbeat():
         after = 0
     board, _ = public_board(db, event)   # at most BOARD_TTL old; fine for a rank display
     standing = next((e for e in board if e["team_id"] == auth["team_id"]), {})
-    return jsonify({
+    return {"ctf": {
+        "instance_id": auth["instance_id"],
         "event": _event_json(event),
-        "team": {"id": auth["team_id"], "name": auth["team_name"],
-                 "score": standing.get("score", 0), "rank": standing.get("rank"),
-                 "teams": len(board)},
+        "team": {"id": auth["team_id"], "name": auth["team_name"], "banned": bool(auth["banned"]),
+                 "score": standing.get("score", 0), "rank": standing.get("rank"), "teams": len(board)},
         "solved": ctf.team_solved_keys(db, auth["team_id"]),
         "catalog_version": ctf.catalog_version(db, event["id"]),
         "announcements": [dict(a) for a in ctf.announcements_since(db, event["id"], after)],
         # Ids still current, so clients can drop announcements the organiser deleted.
         "announcement_ids": ctf.announcement_ids(db, event["id"]),
-        "heartbeat_interval": current_app.config["HEARTBEAT_INTERVAL"],
-        "server_time": now(),
-    })
+    }}
+
+
+HEARTBEAT_PARTS.append(heartbeat_part)
 
 
 @bp.post("/solves")
 def submit_solve():
-    auth = _authenticate()
-    rate_limit(f"solve:{auth['instance_id']}", "RATE_LIMIT_SOLVE")
+    device = authenticate()
+    rate_limit(f"solve:{device['id']}", "RATE_LIMIT_SOLVE")
+    auth = _participation(device)
     data = json_body()
     result, points, bonus = ctf.submit_solve(get_db(), auth, data.get("challenge_id"), data.get("flag"),
                                              data.get("solved_at"), client_ip())
@@ -191,19 +181,11 @@ def submit_solve():
 @bp.get("/challenges")
 def challenges():
     """The event's catalog without flags, so a client can tell which challenges count."""
-    auth = _authenticate()
+    auth = _participation(authenticate())
     rows = ctf.list_challenges(get_db(), auth["event_id"], enabled_only=True)
     return jsonify({"challenges": [
         {"id": r["key"], "title": r["title"], "category": r["category"], "points": r["points"],
          "type": r["ctype"]} for r in rows]})
-
-
-@bp.delete("/instance")
-def leave():
-    """The user switched the central server off in the landing page."""
-    auth = _authenticate()
-    ctf.revoke_instance(get_db(), auth["instance_id"])
-    return "", 204
 
 
 # The public scoreboard is the one endpoint anyone may poll. It is served

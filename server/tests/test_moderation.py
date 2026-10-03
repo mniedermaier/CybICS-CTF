@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from conftest import CATALOG, FLAGS, auth, enroll
+from conftest import CATALOG, FLAGS, auth, enroll, enroll_device
 from cybics_mgmt import create_app
 from cybics_mgmt.ctf import logic as ctf
 from cybics_mgmt.db import MIGRATIONS, connect, get_db, migrate
@@ -48,15 +48,20 @@ def test_time_filters_survive_broken_values(app):
 
 
 @pytest.mark.parametrize("body", [
-    {"join_code": 123, "team_name": "Red", "team_password": "abcd", "instance": {"kind": "virtual"}},
-    {"join_code": "X", "team_name": ["Red"], "team_password": "abcd", "instance": {"kind": "virtual"}},
-    {"join_code": "X", "team_name": "Red", "team_password": 12345, "instance": {"kind": "virtual"}},
-    {"join_code": "X", "team_name": "Red", "team_password": "abcd", "instance": ["virtual"]},
+    {"join_code": 123, "team_name": "Red", "team_password": "abcd"},
+    {"join_code": "X", "team_name": ["Red"], "team_password": "abcd"},
+    {"join_code": "X", "team_name": "Red", "team_password": 12345},
 ])
-def test_wrong_types_on_enroll_are_400(client, event, body):
+def test_wrong_types_on_join_are_400(client, event, body):
     if body["join_code"] == "X":
         body["join_code"] = event["join_code"]
-    resp = client.post("/api/v1/enroll", json=body)
+    token = enroll_device(client, event["join_code"]).get_json()["token"]
+    resp = client.post("/api/v1/ctf/join", headers=auth(token), json=body)
+    assert resp.status_code == 400, resp.get_json()
+
+
+def test_wrong_device_type_on_enroll_is_400(client, event):
+    resp = client.post("/api/v1/enroll", json={"code": event["join_code"], "device": ["virtual"]})
     assert resp.status_code == 400, resp.get_json()
 
 
@@ -79,12 +84,12 @@ def test_announcements_after_is_clamped(client, enrolled, after):
 
 
 def test_heartbeat_reports_catalog_version(client, enrolled, event, app):
-    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()
+    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()["ctf"]
     with app.app_context():
         db = get_db()
         cid = db.execute("SELECT id FROM challenges WHERE key = 'physical_process'").fetchone()["id"]
         ctf.update_challenge(db, event["id"], cid, 100, False)
-    hb2 = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()
+    hb2 = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()["ctf"]
     assert hb["catalog_version"] and hb["catalog_version"] != hb2["catalog_version"]
 
 
@@ -128,20 +133,20 @@ def test_voided_solve_scores_nothing_and_is_not_resent(admin, client, enrolled, 
         solve_id = get_db().execute("SELECT id FROM solves").fetchone()["id"]
     admin.post(f"/admin/events/{event['id']}/solves/{solve_id}/void", data=CSRF)
 
-    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()
+    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()["ctf"]
     assert hb["team"]["score"] == 0
     # still on record, so the client's reconciliation leaves it alone ...
     assert "physical_process" in hb["solved"]
     # ... and a direct resubmission does not bring the points back
     assert solve(client, enrolled["token"], "physical_process").get_json()["result"] == "duplicate"
     assert client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]),
-                       json={}).get_json()["team"]["score"] == 0
+                       json={}).get_json()["ctf"]["team"]["score"] == 0
 
     page = admin.get(f"/admin/events/{event['id']}/solves").data
     assert b"voided" in page and b"Restore" in page
     admin.post(f"/admin/events/{event['id']}/solves/{solve_id}/restore", data=CSRF)
     assert client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]),
-                       json={}).get_json()["team"]["score"] == 100
+                       json={}).get_json()["ctf"]["team"]["score"] == 100
 
 
 def test_deleting_a_team_keeps_its_audit_trail(admin, client, enrolled, event, app):
@@ -186,15 +191,16 @@ def test_team_admin_actions(admin, client, event, app):
 
 def test_revoke_instance_from_ui(admin, client, enrolled, event):
     admin.post(f"/admin/events/{event['id']}/instances/{enrolled['instance_id']}/revoke", data=CSRF)
-    assert client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).status_code == 401
+    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={})
+    assert hb.status_code == 200 and hb.get_json()["ctf"] is None     # still a device, no longer in the event
 
 
 def test_announcement_delete(admin, client, enrolled, event):
     admin.post(f"/admin/events/{event['id']}/announcements", data={**CSRF, "message": "hello"})
-    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()
+    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()["ctf"]
     aid = hb["announcements"][0]["id"]
     admin.post(f"/admin/events/{event['id']}/announcements/{aid}/delete", data=CSRF)
-    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()
+    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()["ctf"]
     assert hb["announcements"] == []
 
 
@@ -258,20 +264,17 @@ def test_generated_secrets_are_private_and_stable(tmp_path, monkeypatch):
         assert (tmp_path / name).stat().st_mode & 0o777 == 0o600
 
 
-def test_migration_from_v1_keeps_data(tmp_path):
-    path = str(tmp_path / "old.sqlite")
-    conn = connect(path)
-    conn.executescript(f"BEGIN;\n{MIGRATIONS[0]}\nPRAGMA user_version = 1;\nCOMMIT;")
-    conn.executescript("""
-        INSERT INTO events (id, slug, name, join_code, created_at) VALUES (1, 'e', 'E', 'ABC', 0);
-        INSERT INTO teams (id, event_id, name, password_hash, created_at) VALUES (1, 1, 'Old Team', 'x', 0);
-        INSERT INTO submissions (event_id, team_id, challenge_key, result, received_at)
-            VALUES (1, 1, 'scanning', 'invalid_flag', 0);
-    """)
-    conn.close()
+def test_deleting_a_team_keeps_its_submissions(tmp_path):
+    path = str(tmp_path / "db.sqlite")
     migrate(path)
     conn = connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    conn.executescript("""
+        INSERT INTO events (id, slug, name, join_code, created_at) VALUES (1, 'e', 'E', 'ABC', 0);
+        INSERT INTO teams (id, event_id, name, password_hash, created_at) VALUES (1, 1, 'Old Team', 'x', 0);
+        INSERT INTO submissions (event_id, team_id, team_name, challenge_key, result, received_at)
+            VALUES (1, 1, 'Old Team', 'scanning', 'invalid_flag', 0);
+    """)
     row = conn.execute("SELECT team_id, team_name FROM submissions").fetchone()
     assert (row["team_id"], row["team_name"]) == (1, "Old Team")
     conn.execute("DELETE FROM teams")
@@ -313,7 +316,7 @@ def test_spoofed_board_uid_cannot_revoke_another_team(client, event, admin, capl
 def test_virtual_instance_cannot_claim_a_uid(client, event, app):
     enroll(client, event, kind="virtual", device_uid="0042001a3133")
     with app.app_context():
-        assert get_db().execute("SELECT device_uid FROM instances").fetchone()["device_uid"] is None
+        assert get_db().execute("SELECT device_uid FROM devices").fetchone()["device_uid"] is None
 
 
 def test_state_transitions(app):
@@ -489,12 +492,12 @@ def test_bad_tokens_are_rate_limited(client, event, app):
 
 def test_announcement_ids_are_never_reused(admin, client, enrolled, event):
     admin.post(f"/admin/events/{event['id']}/announcements", data={**CSRF, "message": "typo"})
-    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()
+    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).get_json()["ctf"]
     first = hb["announcements"][0]["id"]
     admin.post(f"/admin/events/{event['id']}/announcements/{first}/delete", data=CSRF)
     admin.post(f"/admin/events/{event['id']}/announcements", data={**CSRF, "message": "fixed"})
     hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]),
-                     json={"announcements_after": first}).get_json()
+                     json={"announcements_after": first}).get_json()["ctf"]
     assert [a["message"] for a in hb["announcements"]] == ["fixed"]
     assert first not in hb["announcement_ids"]
 
@@ -713,14 +716,12 @@ def test_backup_into_a_directory_with_rotation(app, tmp_path):
     target = tmp_path / "backups"
     target.mkdir()
     runner = app.test_cli_runner()
-    for name in ("cybics-ctf-20260101-000000.sqlite", "cybics-ctf-20260102-000000.sqlite"):
+    for name in ("cybics-mgmt-20260101-000000.sqlite", "cybics-mgmt-20260102-000000.sqlite"):
         (target / name).write_text("old")
     result = runner.invoke(args=["backup", str(target), "--keep", "2"])
     assert result.exit_code == 0, result.output
     files = sorted(p.name for p in target.iterdir())
-    # Backups from before the rename age out together with the new ones.
-    assert len(files) == 2 and "cybics-ctf-20260101-000000.sqlite" not in files
-    assert any(f.startswith("cybics-mgmt-") for f in files)
+    assert len(files) == 2 and "cybics-mgmt-20260101-000000.sqlite" not in files
 
 
 
@@ -735,7 +736,7 @@ def test_wrong_team_passwords_are_audited_but_never_lock_the_team(client, event,
 
 
 def test_enrol_guard_counts_only_wrong_passwords_and_can_be_cleared(client, event, app, admin):
-    app.config["RATE_LIMIT_ENROLL"] = (5, 60)
+    app.config["RATE_LIMIT_JOIN"] = (5, 60)
     enroll(client, event, team="Fine Team")
     for _ in range(20):        # garbage costs nothing and must not lock the address
         client.post("/api/v1/enroll", data="x", content_type="application/json")
@@ -767,7 +768,7 @@ def test_deeply_nested_status_never_breaks_the_instances_page(admin, client, enr
     resp = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={"status": deep})
     assert resp.status_code in (200, 400)
     with app.app_context():   # also a row stored before the depth check existed
-        get_db().execute("UPDATE instances SET status_json = ?", ("[" * 3000 + "]" * 3000,))
+        get_db().execute("UPDATE devices SET status_json = ?", ("[" * 3000 + "]" * 3000,))
     assert admin.get(f"/admin/events/{event['id']}/instances").status_code == 200
 
 
@@ -775,7 +776,7 @@ def test_ordinary_status_is_kept(client, enrolled, app):
     status = {"services": {"openplc": True}, "plant": {"tank": {"pressure": 3.2}}}
     client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={"status": status})
     with app.app_context():
-        stored = json.loads(get_db().execute("SELECT status_json FROM instances").fetchone()[0])
+        stored = json.loads(get_db().execute("SELECT status_json FROM devices").fetchone()[0])
     assert stored == status
 
 
@@ -813,9 +814,8 @@ def test_disqualified_team_costs_no_hashing(client, enrolled, app, monkeypatch):
         raise AssertionError("hashed for a banned team")
     monkeypatch.setattr(security, "_with_hashing_slot", no_hashing)
     with app.app_context():
-        join_code = get_db().execute("SELECT join_code FROM events").fetchone()[0]
-    resp = client.post("/api/v1/enroll", json={"join_code": join_code, "team_name": "Red Team",
-                                               "team_password": "secret-12", "instance": {"kind": "virtual"}})
+        event = {"join_code": get_db().execute("SELECT join_code FROM events").fetchone()[0]}
+    resp = enroll(client, event, team="Red Team", password="secret-12")
     assert resp.status_code == 403
 
 
@@ -870,11 +870,11 @@ def test_catalog_version_covers_flags(event, app):
 
 def test_instances_page_hides_revoked_by_default(admin, client, event, app):
     first = enroll(client, event, team="Loop Team").get_json()
-    client.delete("/api/v1/instance", headers=auth(first["token"]))
+    client.delete("/api/v1/ctf/join", headers=auth(first["token"]))
     enroll(client, event, team="Loop Team")
     page = admin.get(f"/admin/events/{event['id']}/instances").data.decode()
-    assert "1 revoked instance(s) hidden" in page and ">revoked<" not in page
-    assert ">revoked<" in admin.get(f"/admin/events/{event['id']}/instances?all=1").data.decode()
+    assert "1 device(s) that left are hidden" in page and ">left<" not in page
+    assert ">left<" in admin.get(f"/admin/events/{event['id']}/instances?all=1").data.decode()
 
 
 def test_enrol_and_leave_loops_are_capped_per_team(client, event, monkeypatch):
@@ -915,7 +915,7 @@ def test_short_secret_key_from_env_is_refused(tmp_path, monkeypatch):
 def test_admin_page_indexes_exist(app):
     with app.app_context():
         names = {r[0] for r in get_db().execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
-    assert {"idx_instances_uid", "idx_instances_team_live", "idx_submissions_team"} <= names
+    assert {"idx_devices_uid", "idx_instances_team_live", "idx_submissions_team"} <= names
 
 
 

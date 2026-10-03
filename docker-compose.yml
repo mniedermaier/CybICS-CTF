@@ -4,7 +4,7 @@
 #   MGMT_ADMIN_PASSWORD=... docker compose up -d
 #
 # Every MGMT_* setting from the README can be set in the shell or in a .env
-# file next to this file. The CTF_* names from before the rename still work.
+# file next to this file.
 #
 # Two containers: "proxy" (nginx) is the only one reachable from outside. It
 # buffers requests and drops slow clients, so a participant cannot tie up the
@@ -21,7 +21,7 @@ services:
       server:
         condition: service_healthy
     ports:
-      - "${MGMT_BIND:-${CTF_BIND:-0.0.0.0}}:${MGMT_PORT:-${CTF_PORT:-8000}}:8080"
+      - "${MGMT_BIND:-0.0.0.0}:${MGMT_PORT:-8000}:8080"
     volumes:
       - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./proxy/templates:/etc/nginx/templates:ro
@@ -30,13 +30,13 @@ services:
       # sees it (for Caddy on the host: the network gateway, 172.29.84.1).
       # The default (TEST-NET-1, never routed) matches nothing: clients
       # connect to nginx directly.
-      MGMT_OUTER_PROXY: ${MGMT_OUTER_PROXY:-${CTF_OUTER_PROXY:-192.0.2.255/32}}
+      MGMT_OUTER_PROXY: ${MGMT_OUTER_PROXY:-192.0.2.255/32}
       # The image renders templates into this directory at start; the root
       # filesystem is read-only.
       NGINX_ENVSUBST_OUTPUT_DIR: /tmp
     networks:
       mgmt:
-        ipv4_address: ${MGMT_PROXY_IP:-${CTF_PROXY_IP:-172.29.84.2}}
+        ipv4_address: ${MGMT_PROXY_IP:-172.29.84.2}
     read_only: true
     tmpfs:
       - /tmp
@@ -66,28 +66,28 @@ services:
       - "8000"
     networks:
       mgmt:
-        ipv4_address: ${MGMT_APP_IP:-${CTF_APP_IP:-172.29.84.3}}
+        ipv4_address: ${MGMT_APP_IP:-172.29.84.3}
     environment:
-      MGMT_ADMIN_PASSWORD: ${MGMT_ADMIN_PASSWORD:-${CTF_ADMIN_PASSWORD:-}}
-      MGMT_ALLOW_WEAK_ADMIN_PASSWORD: ${MGMT_ALLOW_WEAK_ADMIN_PASSWORD:-${CTF_ALLOW_WEAK_ADMIN_PASSWORD:-0}}
-      MGMT_SECRET_KEY: ${MGMT_SECRET_KEY:-${CTF_SECRET_KEY:-}}
-      MGMT_SERVER_NAME: ${MGMT_SERVER_NAME:-${CTF_SERVER_NAME:-CybICS-mgmt}}
-      MGMT_PUBLIC_URL: ${MGMT_PUBLIC_URL:-${CTF_PUBLIC_URL:-}}
-      MGMT_HEARTBEAT_INTERVAL: ${MGMT_HEARTBEAT_INTERVAL:-${CTF_HEARTBEAT_INTERVAL:-30}}
-      MGMT_ONLINE_WINDOW: ${MGMT_ONLINE_WINDOW:-${CTF_ONLINE_WINDOW:-90}}
-      MGMT_RATE_ENROLL: ${MGMT_RATE_ENROLL:-${CTF_RATE_ENROLL:-60}}
-      MGMT_RATE_HEARTBEAT: ${MGMT_RATE_HEARTBEAT:-${CTF_RATE_HEARTBEAT:-30}}
-      MGMT_RATE_SOLVE: ${MGMT_RATE_SOLVE:-${CTF_RATE_SOLVE:-30}}
-      MGMT_RATE_LOGIN: ${MGMT_RATE_LOGIN:-${CTF_RATE_LOGIN:-10}}
-      MGMT_RATE_NEW_TEAMS: ${MGMT_RATE_NEW_TEAMS:-${CTF_RATE_NEW_TEAMS:-100}}
+      MGMT_ADMIN_PASSWORD: ${MGMT_ADMIN_PASSWORD:-}
+      MGMT_ALLOW_WEAK_ADMIN_PASSWORD: ${MGMT_ALLOW_WEAK_ADMIN_PASSWORD:-0}
+      MGMT_SECRET_KEY: ${MGMT_SECRET_KEY:-}
+      MGMT_SERVER_NAME: ${MGMT_SERVER_NAME:-CybICS-mgmt}
+      MGMT_PUBLIC_URL: ${MGMT_PUBLIC_URL:-}
+      MGMT_HEARTBEAT_INTERVAL: ${MGMT_HEARTBEAT_INTERVAL:-30}
+      MGMT_ONLINE_WINDOW: ${MGMT_ONLINE_WINDOW:-90}
+      MGMT_RATE_JOIN: ${MGMT_RATE_JOIN:-60}
+      MGMT_RATE_HEARTBEAT: ${MGMT_RATE_HEARTBEAT:-30}
+      MGMT_RATE_SOLVE: ${MGMT_RATE_SOLVE:-30}
+      MGMT_RATE_LOGIN: ${MGMT_RATE_LOGIN:-10}
+      MGMT_RATE_NEW_TEAMS: ${MGMT_RATE_NEW_TEAMS:-100}
       MGMT_RATE_ENROL_CODE: ${MGMT_RATE_ENROL_CODE:-60}
       MGMT_RATE_NEW_DEVICES: ${MGMT_RATE_NEW_DEVICES:-100}
-      MGMT_ADMIN_SESSION_HOURS: ${MGMT_ADMIN_SESSION_HOURS:-${CTF_ADMIN_SESSION_HOURS:-12}}
+      MGMT_ADMIN_SESSION_HOURS: ${MGMT_ADMIN_SESSION_HOURS:-12}
       # The proxy above is the only peer allowed to set X-Forwarded-*.
       MGMT_TRUST_PROXY: "1"
-      MGMT_FORWARDED_ALLOW_IPS: ${MGMT_PROXY_IP:-${CTF_PROXY_IP:-172.29.84.2}}
-      MGMT_SECURE_COOKIES: ${MGMT_SECURE_COOKIES:-${CTF_SECURE_COOKIES:-0}}
-      MGMT_LOG_LEVEL: ${MGMT_LOG_LEVEL:-${CTF_LOG_LEVEL:-INFO}}
+      MGMT_FORWARDED_ALLOW_IPS: ${MGMT_PROXY_IP:-172.29.84.2}
+      MGMT_SECURE_COOKIES: ${MGMT_SECURE_COOKIES:-0}
+      MGMT_LOG_LEVEL: ${MGMT_LOG_LEVEL:-INFO}
     volumes:
       - data:/data
     read_only: true
@@ -106,7 +106,7 @@ networks:
     ipam:
       config:
         # Change if it collides with a local network (and the two IPs above).
-        - subnet: ${MGMT_SUBNET:-${CTF_SUBNET:-172.29.84.0/24}}
+        - subnet: ${MGMT_SUBNET:-172.29.84.0/24}
 
 volumes:
   data:

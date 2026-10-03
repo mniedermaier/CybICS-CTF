@@ -7,6 +7,7 @@ from flask import abort, current_app, flash, redirect, render_template, request,
 from .. import device_input
 from ..admin import bp, csv_response, lockouts
 from ..db import get_db, now
+from ..fleet import logic as fleet
 from ..security import admin_required, audit
 from . import logic as ctf
 from .api import invalidate_board
@@ -86,9 +87,9 @@ def event(event_id):
     online_since = now() - current_app.config["ONLINE_WINDOW"]
     stats = db.execute("""
         SELECT COUNT(*) AS total,
-               SUM(i.last_seen >= :since) AS online,
-               SUM(i.kind = 'physical') AS physical
-        FROM instances i JOIN teams t ON t.id = i.team_id
+               SUM(d.last_seen >= :since) AS online,
+               SUM(d.kind = 'physical') AS physical
+        FROM instances i JOIN teams t ON t.id = i.team_id JOIN devices d ON d.id = i.device_id
         WHERE t.event_id = :e AND i.revoked = 0""", {"e": event_id, "since": online_since}).fetchone()
     return render_template("admin/event.html", event=event, stats=stats,
                            challenge_count=len(ctf.list_challenges(db, event_id, enabled_only=True)),
@@ -130,7 +131,7 @@ def event_join_code(event_id):
     _event_or_404(event_id)
     ctf.regenerate_join_code(get_db(), event_id)
     audit("regenerate_join_code", event_id=event_id)
-    flash("New join code generated. Enrolled instances are not affected.", "ok")
+    flash("New join code generated. Devices already in the event stay.", "ok")
     return _back(event_id)
 
 
@@ -153,7 +154,7 @@ def announce(event_id):
     _event_or_404(event_id)
     ctf.add_announcement(get_db(), event_id, request.form.get("message", ""))
     audit("announce", event_id=event_id)
-    flash("Announcement sent; instances pick it up at their next heartbeat.", "ok")
+    flash("Announcement sent; devices pick it up at their next heartbeat.", "ok")
     return _back(event_id)
 
 
@@ -270,7 +271,7 @@ def team_action(event_id, team_id, action):
     team = db.execute("SELECT name FROM teams WHERE id = ?", (team_id,)).fetchone()
     if action == "ban":
         ctf.set_team_banned(db, team_id, True)
-        flash("Team disqualified; its instances are locked out.", "ok")
+        flash("Team disqualified; its devices can no longer report solves.", "ok")
     elif action == "unban":
         ctf.set_team_banned(db, team_id, False)
         flash("Team reinstated.", "ok")
@@ -282,7 +283,8 @@ def team_action(event_id, team_id, action):
             flash("Type the team name to confirm deletion.", "error")
             return _back(event_id, "teams")
         ctf.delete_team(db, team_id)
-        flash("Team deleted with its instances and solves. Its audit trail is kept.", "ok")
+        flash("Team deleted with its solves; its devices left the event and stay in the fleet. "
+              "Its audit trail is kept.", "ok")
     else:
         abort(404)
     audit(f"team_{action}", event_id=event_id, team=team["name"])
@@ -298,13 +300,16 @@ def instances(event_id):
     event = _event_or_404(event_id)
     show_all = request.args.get("all") == "1"
     rows = db.execute(f"""
-        SELECT i.*, t.name AS team,
+        SELECT i.id, i.revoked, i.joined_at, i.joined_by, i.device_id, t.name AS team,
+               d.kind, d.device_uid, d.hostname, d.label, d.cybics_version, d.mode, d.remote_addr,
+               d.status_json, d.last_seen,
             (SELECT COUNT(DISTINCT i2.team_id) FROM instances i2 JOIN teams t2 ON t2.id = i2.team_id
-             WHERE i.device_uid IS NOT NULL AND i2.device_uid = i.device_uid AND i2.revoked = 0
+             JOIN devices d2 ON d2.id = i2.device_id
+             WHERE d.device_uid IS NOT NULL AND d2.device_uid = d.device_uid AND i2.revoked = 0
                AND t2.event_id = t.event_id) AS uid_teams
-        FROM instances i JOIN teams t ON t.id = i.team_id
+        FROM instances i JOIN teams t ON t.id = i.team_id JOIN devices d ON d.id = i.device_id
         WHERE t.event_id = ? {"" if show_all else "AND i.revoked = 0"}
-        ORDER BY i.revoked, t.name, i.enrolled_at LIMIT 1000""", (event_id,)).fetchall()
+        ORDER BY i.revoked, t.name, i.joined_at LIMIT 1000""", (event_id,)).fetchall()
     revoked = db.execute("""SELECT COUNT(*) FROM instances i JOIN teams t ON t.id = i.team_id
                             WHERE t.event_id = ? AND i.revoked = 1""", (event_id,)).fetchone()[0]
     online_since = now() - current_app.config["ONLINE_WINDOW"]
@@ -326,8 +331,35 @@ def instance_revoke(event_id, instance_id):
     _owned("instances", instance_id, event_id)
     ctf.revoke_instance(get_db(), instance_id)
     audit("revoke_instance", event_id=event_id, instance=instance_id)
-    flash("Instance revoked. It has to enrol again to report.", "ok")
+    flash("The device left the event. It has to join again to report.", "ok")
     return _back(event_id, "instances")
+
+
+# ---------- putting devices into teams (from the device's fleet page) ----------
+
+@bp.post("/fleet/devices/<device_id>/ctf")
+@admin_required
+def device_assign(device_id):
+    """Put a device into a team, or take it out of its event; no team password needed."""
+    db = get_db()
+    device = fleet.get_device(db, device_id)
+    if device is None:
+        abort(404)
+    team_id = request.form.get("team", "")
+    if team_id == "leave":
+        ctf.leave(db, device_id)
+        audit("fleet_device_leave_event", device=device_id)
+        flash("The device left its event.", "ok")
+    else:
+        try:
+            team_id = int(team_id[:9])
+        except ValueError:
+            raise CTFError("not_found", "Choose a team.", 404) from None
+        _, event, team, uid_teams = ctf.assign(db, device, team_id)
+        audit("fleet_device_assign", event_id=event["id"], device=device_id, team=team["name"])
+        flash(f"The device is now in team {team['name']} of {event['name']}."
+              + (f" Its board UID is also live in {', '.join(uid_teams)}." if uid_teams else ""), "ok")
+    return redirect(url_for("admin.fleet_device", device_id=device_id))
 
 
 # ---------- solves and audit ----------

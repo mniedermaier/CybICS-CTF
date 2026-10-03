@@ -1,9 +1,9 @@
-"""The instance-facing API: enrolment, heartbeat, solves, scoreboard."""
+"""The device-facing API: enrolment, joining an event, heartbeat, solves, scoreboard."""
 import json
 
 import pytest
 
-from conftest import CATALOG, FLAGS, auth, enroll
+from conftest import CATALOG, FLAGS, auth, enroll, enroll_device, join
 from cybics_mgmt.ctf import logic as ctf
 from cybics_mgmt.db import get_db
 
@@ -16,7 +16,7 @@ def solve(client, token, challenge, flag=None):
 
 def test_info_identifies_the_server(client):
     data = client.get("/api/v1/info").get_json()
-    assert data["service"] == "cybics-ctf"
+    assert data["service"] == "cybics-mgmt"
     assert data["api_version"] == 1
 
 
@@ -28,14 +28,13 @@ def test_enroll_creates_team_and_returns_token_once(client, event, app):
     assert data["event"]["state"] == "running"
     assert len(data["token"]) > 30
     with app.app_context():
-        row = get_db().execute("SELECT token_hash FROM instances").fetchone()
+        row = get_db().execute("SELECT token_hash FROM devices").fetchone()
         assert data["token"] not in row["token_hash"], "only the hash may be stored"
 
 
 def test_join_code_is_case_insensitive(client, event):
-    resp = client.post("/api/v1/enroll", json={
-        "join_code": event["join_code"].lower(), "team_name": "Blue", "team_password": "pass-1234",
-        "instance": {"kind": "virtual"}})
+    token = enroll_device(client, event["join_code"].lower()).get_json()["token"]
+    resp = join(client, token, {"join_code": event["join_code"].lower()}, team="Blue", password="pass-1234")
     assert resp.status_code == 201
 
 
@@ -54,9 +53,8 @@ def test_wrong_team_password_is_refused(client, event):
 
 
 def test_unknown_join_code(client, event):
-    resp = client.post("/api/v1/enroll", json={
-        "join_code": "NOPE1234", "team_name": "x y", "team_password": "abcd",
-        "instance": {"kind": "virtual"}})
+    token = enroll_device(client, event["join_code"]).get_json()["token"]
+    resp = join(client, token, {"join_code": "NOPE1234"}, team="x y", password="abcd")
     assert resp.status_code == 404
     assert resp.get_json()["error"]["code"] == "invalid_join_code"
 
@@ -64,14 +62,16 @@ def test_unknown_join_code(client, event):
 def test_physical_instance_needs_device_uid(client, event):
     resp = enroll(client, event, kind="physical")
     assert resp.status_code == 400
-    assert resp.get_json()["error"]["code"] == "invalid_instance"
+    assert resp.get_json()["error"]["code"] == "invalid_device"
 
 
 def test_physical_reenrol_revokes_previous_registration(client, event):
+    # A reflashed board is a new device with the same UID; in the same team it replaces the old one.
     old = enroll(client, event, kind="physical", device_uid="0042001A3133").get_json()
     new = enroll(client, event, kind="physical", device_uid="0042001a3133").get_json()
-    assert client.post("/api/v1/heartbeat", headers=auth(old["token"]), json={}).status_code == 401
-    assert client.post("/api/v1/heartbeat", headers=auth(new["token"]), json={}).status_code == 200
+    assert client.post("/api/v1/heartbeat", headers=auth(old["token"]), json={}).get_json()["ctf"] is None
+    assert client.post("/api/v1/heartbeat", headers=auth(new["token"]), json={}).get_json()["ctf"]["team"]["name"] \
+        == "Red Team"
 
 
 def test_registration_closed(client, event, app):
@@ -83,9 +83,10 @@ def test_registration_closed(client, event, app):
 
 
 def test_cannot_enrol_into_finished_event(client, event, app):
+    token = enroll_device(client, event["join_code"]).get_json()["token"]
     with app.app_context():
         ctf.set_event_state(get_db(), event["id"], "finished")
-    assert enroll(client, event).status_code == 409
+    assert join(client, token, event).status_code == 409
 
 
 def test_bad_team_names_are_refused(client, event):
@@ -107,7 +108,7 @@ def test_solve_flow_and_scoring(client, enrolled):
     assert solve(client, token, "physical_process").get_json()["result"] == "duplicate"
     assert solve(client, token, "plc_programming").get_json()["points"] == 150
 
-    hb = client.post("/api/v1/heartbeat", headers=auth(token), json={}).get_json()
+    hb = client.post("/api/v1/heartbeat", headers=auth(token), json={}).get_json()["ctf"]
     assert hb["team"]["score"] == 250
     assert hb["team"]["rank"] == 1
     assert hb["solved"] == ["physical_process", "plc_programming"]
@@ -146,13 +147,25 @@ def test_disabled_challenge_is_unknown(client, enrolled, event, app):
 def test_banned_team_is_locked_out(client, enrolled, app):
     with app.app_context():
         ctf.set_team_banned(get_db(), enrolled["team"]["id"], True)
-    resp = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={})
+    # The device keeps its heartbeat (the fleet still manages it); its team cannot report.
+    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={})
+    assert hb.status_code == 200 and hb.get_json()["ctf"]["team"]["banned"] is True
+    resp = solve(client, enrolled["token"], "physical_process")
     assert resp.status_code == 403
     assert resp.get_json()["error"]["code"] == "team_banned"
 
 
-def test_leave_revokes_token(client, enrolled):
-    assert client.delete("/api/v1/instance", headers=auth(enrolled["token"])).status_code == 204
+def test_leaving_the_event_keeps_the_device(client, enrolled):
+    assert client.delete("/api/v1/ctf/join", headers=auth(enrolled["token"])).status_code == 204
+    hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={})
+    assert hb.status_code == 200 and hb.get_json()["ctf"] is None
+    resp = solve(client, enrolled["token"], "physical_process")
+    assert resp.status_code == 409 and resp.get_json()["error"]["code"] == "not_in_event"
+    assert client.get("/api/v1/challenges", headers=auth(enrolled["token"])).status_code == 409
+
+
+def test_disconnecting_retires_the_device(client, enrolled):
+    assert client.delete("/api/v1/device", headers=auth(enrolled["token"])).status_code == 204
     assert client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]), json={}).status_code == 401
 
 
@@ -161,14 +174,14 @@ def test_heartbeat_stores_status_and_delivers_announcements(client, enrolled, ev
         ctf.add_announcement(get_db(), event["id"], "Hint for scanning is out")
     status = {"cybics_version": "1.2.4", "mode": "minimal", "services": {"openplc": True}}
     hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]),
-                     json={"status": status}).get_json()
+                     json={"status": status}).get_json()["ctf"]
     assert [a["message"] for a in hb["announcements"]] == ["Hint for scanning is out"]
     last = hb["announcements"][-1]["id"]
     hb = client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]),
-                     json={"announcements_after": last}).get_json()
+                     json={"announcements_after": last}).get_json()["ctf"]
     assert hb["announcements"] == []
     with app.app_context():
-        row = get_db().execute("SELECT cybics_version, mode, status_json FROM instances").fetchone()
+        row = get_db().execute("SELECT cybics_version, mode, status_json FROM devices").fetchone()
     assert row["cybics_version"] == "1.2.4" and row["mode"] == "minimal"
     assert json.loads(row["status_json"])["services"] == {"openplc": True}
 
@@ -263,7 +276,7 @@ def test_oversized_status_is_discarded_not_truncated(client, enrolled, app):
     assert client.post("/api/v1/heartbeat", headers=auth(enrolled["token"]),
                        json={"status": big}).status_code == 200
     with app.app_context():
-        row = get_db().execute("SELECT status_json FROM instances").fetchone()
+        row = get_db().execute("SELECT status_json FROM devices").fetchone()
     assert "error" in json.loads(row["status_json"])
 
 

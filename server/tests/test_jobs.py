@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from conftest import ADMIN_PASSWORD, auth, enroll
+from conftest import ADMIN_PASSWORD, auth
 from cybics_mgmt import create_app
 from cybics_mgmt.db import get_db
 from cybics_mgmt.fleet import jobs, signing
@@ -22,7 +22,7 @@ def enrol_device(client, app, allowed=ALL, label="Board 7"):
     """A device with fleet support that allows `allowed` and pinned the server's key."""
     with app.app_context():
         code = fleet.create_code(get_db(), "", None)["code"]
-    data = client.post("/api/v1/fleet/enroll", json={"code": code, "device": LAPTOP, "label": label}).get_json()
+    data = client.post("/api/v1/enroll", json={"code": code, "device": LAPTOP, "label": label}).get_json()
     key = data["signing_key"]
     data["fingerprint"] = key_fingerprint(int(key["n"], 16), key["e"])
     beat(client, data, allowed=allowed)
@@ -30,7 +30,7 @@ def enrol_device(client, app, allowed=ALL, label="Board 7"):
 
 
 def beat(client, device, allowed=ALL, results=(), fingerprint=None):
-    resp = client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={
+    resp = client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={
         "status": {"services": {"openplc": True}},
         "management": {"allowed": list(allowed), "key_fingerprint": fingerprint or device["fingerprint"],
                        "client": "1"},
@@ -153,14 +153,10 @@ def test_only_allowed_actions_can_be_sent(client, app, admin):
     assert "does not allow this action" in resp.data.decode() and job_rows(app, device) == []
 
 
-def test_no_jobs_for_legacy_retired_or_silent_devices(client, app, admin, event):
-    legacy = enroll(client, event).get_json()
-    resp = admin.post(f"/admin/fleet/devices/{legacy['instance_id']}/jobs", data={**CSRF, "action": "identify"},
-                      follow_redirects=True)
-    assert "without fleet support" in resp.data.decode()
+def test_no_jobs_for_retired_or_silent_devices(client, app, admin):
     with app.app_context():
         code = fleet.create_code(get_db(), "", None)["code"]
-    silent = client.post("/api/v1/fleet/enroll", json={"code": code, "device": LAPTOP}).get_json()
+    silent = client.post("/api/v1/enroll", json={"code": code, "device": LAPTOP}).get_json()
     assert "not reported its management settings" in send(admin, silent, "identify").data.decode()
     device = enrol_device(client, app)
     admin.post(f"/admin/fleet/devices/{device['device_id']}/retire", data=CSRF)
@@ -215,7 +211,7 @@ def test_odd_results_are_handled(client, app, admin):
     assert job_rows(app, device)[0]["state"] == "failed"
     assert "unknown result" in job_rows(app, device)[0]["detail"]
     assert job_rows(app, other)[0]["state"] == "delivered"             # not this device's job
-    client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={"job_results": "nope"})
+    client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={"job_results": "nope"})
 
 
 def test_undelivered_jobs_expire(client, app, admin):
@@ -257,7 +253,7 @@ def test_bulk_sends_to_devices_that_allow_it(client, app, admin):
 # ---------- log bundles ----------
 
 def upload(client, device, job_id, data):
-    return client.post(f"/api/v1/fleet/jobs/{job_id}/logs", headers={**auth(device["token"]),
+    return client.post(f"/api/v1/jobs/{job_id}/logs", headers={**auth(device["token"]),
                        "Content-Type": "application/gzip"}, data=data)
 
 

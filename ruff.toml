@@ -17,4 +17,4 @@ ignore = [
 "client/cybics_mgmt_client.py" = ["BLE001", "S110"]
 
 [lint.isort]
-known-first-party = ["cybics_mgmt", "cybics_ctf", "cybics_mgmt_client", "conftest"]
+known-first-party = ["cybics_mgmt", "cybics_mgmt_client", "conftest"]

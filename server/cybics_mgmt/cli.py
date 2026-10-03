@@ -8,7 +8,7 @@ Command-line administration, for scripted setups:
     flask --app cybics_mgmt backup /data/backup-$(date +%F).sqlite
     flask --app cybics_mgmt login-link
 
-The event commands live in ctf/cli.py. `flask --app cybics_ctf` still works.
+The event commands live in ctf/cli.py.
 """
 import os
 import secrets
@@ -22,7 +22,6 @@ from .db import get_db, now
 from .security import audit, hash_token
 
 BACKUP_PREFIX = "cybics-mgmt-"
-BACKUP_PREFIXES = (BACKUP_PREFIX, "cybics-ctf-")
 
 
 def init_app(app):
@@ -49,11 +48,8 @@ def init_app(app):
         get_db().execute("VACUUM INTO ?", (path,))
         click.echo(f"Backup written to {path}.")
         if directory and keep > 0:
-            # Backups written before the rename carry the old prefix. Sort by
-            # the timestamp after the prefix, so both kinds age out in order.
-            old = sorted((f for f in os.listdir(directory)
-                          if f.startswith(BACKUP_PREFIXES) and f.endswith(".sqlite")),
-                         key=lambda f: f.split("-", 2)[2])[:-keep]
+            old = sorted(f for f in os.listdir(directory)
+                         if f.startswith(BACKUP_PREFIX) and f.endswith(".sqlite"))[:-keep]
             for name in old:
                 os.unlink(os.path.join(directory, name))
                 click.echo(f"Removed old backup {name}.")

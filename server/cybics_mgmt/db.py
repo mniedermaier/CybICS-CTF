@@ -9,21 +9,15 @@ Schema changes are applied as numbered migrations tracked in PRAGMA user_version
 Append to MIGRATIONS; never edit a migration that has shipped.
 """
 import fcntl
-import logging
-import os
 import sqlite3
 import time
 
 from flask import current_app, g
 
-log = logging.getLogger("cybics_mgmt")
-
 DATABASE_NAME = "cybics-mgmt.sqlite"
-# The file name before the rename to CybICS-mgmt; adopted once at start.
-LEGACY_DATABASE_NAME = "cybics-ctf.sqlite"
 
 MIGRATIONS = [
-    # 1: initial schema
+    # 1: the schema of CybICS-mgmt.
     """
     CREATE TABLE events (
         id                      INTEGER PRIMARY KEY,
@@ -34,22 +28,30 @@ MIGRATIONS = [
                                 CHECK (state IN ('draft', 'running', 'paused', 'finished')),
         scoreboard_public       INTEGER NOT NULL DEFAULT 1,
         allow_team_registration INTEGER NOT NULL DEFAULT 1,
+        -- Optional first-blood bonus, in percent of the challenge's points.
+        first_blood_bonus       INTEGER NOT NULL DEFAULT 0 CHECK (first_blood_bonus BETWEEN 0 AND 100),
         started_at              REAL,
         finished_at             REAL,
         created_at              REAL    NOT NULL
     );
 
+    -- The organiser owns points and the enabled switch after the first import.
+    -- A re-import must not undo their changes, so "missing from the imported
+    -- file" (in_catalog) is tracked apart from "switched off by the organiser"
+    -- (enabled), and custom points are marked.
     CREATE TABLE challenges (
-        id          INTEGER PRIMARY KEY,
-        event_id    INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-        key         TEXT    NOT NULL,
-        category    TEXT    NOT NULL DEFAULT '',
-        title       TEXT    NOT NULL,
-        points      INTEGER NOT NULL CHECK (points >= 0),
-        flag_hash   TEXT    NOT NULL,
-        ctype       TEXT    NOT NULL DEFAULT 'offensive',
-        enabled     INTEGER NOT NULL DEFAULT 1,
-        position    INTEGER NOT NULL DEFAULT 0,
+        id            INTEGER PRIMARY KEY,
+        event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        key           TEXT    NOT NULL,
+        category      TEXT    NOT NULL DEFAULT '',
+        title         TEXT    NOT NULL,
+        points        INTEGER NOT NULL CHECK (points >= 0),
+        flag_hash     TEXT    NOT NULL,
+        ctype         TEXT    NOT NULL DEFAULT 'offensive',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        in_catalog    INTEGER NOT NULL DEFAULT 1,
+        points_custom INTEGER NOT NULL DEFAULT 0,
+        position      INTEGER NOT NULL DEFAULT 0,
         UNIQUE (event_id, key)
     );
 
@@ -63,158 +65,9 @@ MIGRATIONS = [
         UNIQUE (event_id, name)
     );
 
-    CREATE TABLE instances (
-        id             TEXT    PRIMARY KEY,
-        team_id        INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-        token_hash     TEXT    NOT NULL UNIQUE,
-        kind           TEXT    NOT NULL CHECK (kind IN ('virtual', 'physical')),
-        device_uid     TEXT,
-        hostname       TEXT,
-        cybics_version TEXT,
-        mode           TEXT,
-        remote_addr    TEXT,
-        status_json    TEXT,
-        revoked        INTEGER NOT NULL DEFAULT 0,
-        enrolled_at    REAL    NOT NULL,
-        last_seen      REAL
-    );
-    CREATE INDEX idx_instances_team ON instances(team_id);
-
-    CREATE TABLE solves (
-        id           INTEGER PRIMARY KEY,
-        team_id      INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-        challenge_id INTEGER NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
-        instance_id  TEXT    REFERENCES instances(id) ON DELETE SET NULL,
-        client_time  REAL,
-        received_at  REAL    NOT NULL,
-        UNIQUE (team_id, challenge_id)
-    );
-    CREATE INDEX idx_solves_received ON solves(received_at);
-
-    -- Audit log of every submission, correct or not. Wrong flags never come
-    -- from an unmodified landing page (it validates locally before forwarding),
-    -- so they are a strong hint that someone is talking to the API directly.
-    CREATE TABLE submissions (
-        id            INTEGER PRIMARY KEY,
-        event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-        team_id       INTEGER REFERENCES teams(id) ON DELETE CASCADE,
-        instance_id   TEXT    REFERENCES instances(id) ON DELETE SET NULL,
-        challenge_key TEXT    NOT NULL,
-        result        TEXT    NOT NULL,
-        remote_addr   TEXT,
-        received_at   REAL    NOT NULL
-    );
-    CREATE INDEX idx_submissions_event ON submissions(event_id, received_at);
-
-    CREATE TABLE announcements (
-        id         INTEGER PRIMARY KEY,
-        event_id   INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-        message    TEXT    NOT NULL,
-        created_at REAL    NOT NULL
-    );
-    """,
-    # 2: moderation keeps its evidence.
-    #  - A solve the organiser removes is voided, not deleted: it stays on the
-    #    team's record (so the instance does not report it again) but scores 0.
-    #  - Deleting a team keeps its audit trail: submissions.team_id becomes NULL
-    #    and the team name is kept as a snapshot. SQLite cannot change a foreign
-    #    key in place, hence the table rebuild.
-    """
-    ALTER TABLE solves ADD COLUMN voided INTEGER NOT NULL DEFAULT 0;
-
-    CREATE TABLE submissions_new (
-        id            INTEGER PRIMARY KEY,
-        event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-        team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
-        team_name     TEXT,
-        instance_id   TEXT    REFERENCES instances(id) ON DELETE SET NULL,
-        challenge_key TEXT    NOT NULL,
-        result        TEXT    NOT NULL,
-        remote_addr   TEXT,
-        received_at   REAL    NOT NULL
-    );
-    INSERT INTO submissions_new (id, event_id, team_id, team_name, instance_id, challenge_key,
-                                 result, remote_addr, received_at)
-        SELECT s.id, s.event_id, s.team_id, t.name, s.instance_id, s.challenge_key,
-               s.result, s.remote_addr, s.received_at
-        FROM submissions s LEFT JOIN teams t ON t.id = s.team_id;
-    DROP TABLE submissions;
-    ALTER TABLE submissions_new RENAME TO submissions;
-    CREATE INDEX idx_submissions_event ON submissions(event_id, received_at);
-    """,
-    # 3: the organiser owns points and the enabled switch after the first
-    # import. A re-import must not undo their changes, so "missing from the
-    # imported file" (in_catalog) is tracked apart from "switched off by the
-    # organiser" (enabled), and custom points are marked.
-    """
-    ALTER TABLE challenges ADD COLUMN in_catalog INTEGER NOT NULL DEFAULT 1;
-    ALTER TABLE challenges ADD COLUMN points_custom INTEGER NOT NULL DEFAULT 0;
-    """,
-    # 4: announcement ids must never be reused (clients ask for "newer than
-    # the last id I saw"; SQLite reuses max(rowid)+1 without AUTOINCREMENT),
-    # and organiser actions get a durable log that survives container
-    # recreation. admin_log.event_id has no foreign key on purpose: the log
-    # must outlive a deleted event.
-    """
-    CREATE TABLE announcements_new (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id   INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-        message    TEXT    NOT NULL,
-        created_at REAL    NOT NULL
-    );
-    INSERT INTO announcements_new (id, event_id, message, created_at)
-        SELECT id, event_id, message, created_at FROM announcements;
-    DROP TABLE announcements;
-    ALTER TABLE announcements_new RENAME TO announcements;
-
-    CREATE TABLE admin_log (
-        id         INTEGER PRIMARY KEY,
-        event_id   INTEGER,
-        action     TEXT    NOT NULL,
-        details    TEXT    NOT NULL DEFAULT '',
-        actor      TEXT    NOT NULL,
-        created_at REAL    NOT NULL
-    );
-    CREATE INDEX idx_admin_log_event ON admin_log(event_id, created_at);
-    """,
-    # 5: admin sessions live server side as well, so logging out ends the
-    # session even if someone copied the cookie.
-    """
-    CREATE TABLE admin_sessions (
-        id         TEXT PRIMARY KEY,
-        created_at REAL NOT NULL,
-        ended_at   REAL
-    );
-    """,
-    # 6: one-time login links, created on the command line. They are the way
-    # in that a login lockout cannot block (see the admin login route).
-    """
-    CREATE TABLE login_links (
-        token_hash TEXT PRIMARY KEY,
-        expires_at REAL NOT NULL,
-        used_at    REAL
-    );
-    """,
-    # 7: indexes for the admin pages, whose row counts participants can grow
-    # (enrol/leave loops add instances, API calls add submissions).
-    """
-    CREATE INDEX idx_instances_uid ON instances(device_uid) WHERE device_uid IS NOT NULL;
-    CREATE INDEX idx_instances_team_live ON instances(team_id, revoked, enrolled_at);
-    CREATE INDEX idx_submissions_team ON submissions(team_id, result);
-    """,
-    # 8: first blood looks up the earliest solve per challenge.
-    """
-    CREATE INDEX idx_solves_challenge ON solves(challenge_id, received_at);
-    """,
-    # 9: optional first-blood bonus, in percent of the challenge's points.
-    """
-    ALTER TABLE events ADD COLUMN first_blood_bonus INTEGER NOT NULL DEFAULT 0
-        CHECK (first_blood_bonus BETWEEN 0 AND 100);
-    """,
-    # 10: the fleet (docs/MGMT_DESIGN.md, phase 1). A device is one CybICS
-    # installation and outlives events; every existing instance gets a legacy
-    # device with the same id.
-    """
+    -- A device is one CybICS installation, a virtual stack or a board, and
+    -- the only identity: its token authenticates every API call. Devices are
+    -- retired, never deleted, and outlive events.
     CREATE TABLE device_groups (
         id          INTEGER PRIMARY KEY,
         name        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
@@ -223,7 +76,7 @@ MIGRATIONS = [
 
     CREATE TABLE devices (
         id              TEXT    PRIMARY KEY,
-        token_hash      TEXT    UNIQUE,
+        token_hash      TEXT    NOT NULL UNIQUE,
         label           TEXT    NOT NULL DEFAULT '',
         group_id        INTEGER REFERENCES device_groups(id) ON DELETE SET NULL,
         kind            TEXT    NOT NULL CHECK (kind IN ('virtual', 'physical')),
@@ -233,15 +86,18 @@ MIGRATIONS = [
         mode            TEXT,
         remote_addr     TEXT,
         status_json     TEXT,
-        legacy          INTEGER NOT NULL DEFAULT 0,
+        -- What the device last reported about its management.
+        allowed_actions TEXT    NOT NULL DEFAULT '[]',
+        key_fingerprint TEXT,
+        client_version  TEXT,
         retired         INTEGER NOT NULL DEFAULT 0,
         retired_reason  TEXT,
         notes           TEXT    NOT NULL DEFAULT '',
         enrolled_at     REAL    NOT NULL,
         last_seen       REAL
     );
-    CREATE INDEX devices_uid ON devices(device_uid);
-    CREATE INDEX devices_group ON devices(group_id);
+    CREATE INDEX idx_devices_uid ON devices(device_uid) WHERE device_uid IS NOT NULL;
+    CREATE INDEX idx_devices_group ON devices(group_id);
 
     CREATE TABLE enrol_codes (
         id          INTEGER PRIMARY KEY,
@@ -253,41 +109,109 @@ MIGRATIONS = [
         created_at  REAL    NOT NULL
     );
 
-    ALTER TABLE instances ADD COLUMN device_id TEXT REFERENCES devices(id) ON DELETE SET NULL;
-    CREATE INDEX instances_device ON instances(device_id);
-
-    INSERT INTO devices (id, kind, device_uid, hostname, cybics_version, mode, remote_addr, status_json,
-                         legacy, enrolled_at, last_seen)
-        SELECT id, kind, device_uid, hostname, cybics_version, mode, remote_addr, status_json,
-               1, enrolled_at, last_seen
-        FROM instances;
-    UPDATE instances SET device_id = id;
-    """,
-    # 11: fleet jobs (docs/MGMT_DESIGN.md, phase 2): what each device allows
-    # and the key it pinned, as it last reported them; signed, sequenced jobs;
-    # uploaded log bundles.
-    """
-    ALTER TABLE devices ADD COLUMN allowed_actions TEXT NOT NULL DEFAULT '[]';
-    ALTER TABLE devices ADD COLUMN key_fingerprint TEXT;
-    ALTER TABLE devices ADD COLUMN client_version TEXT;
-
-    CREATE TABLE jobs (
+    -- An instance is a device's participation in an event, as a member of a
+    -- team. A device has at most one live instance. joined_by tells whether
+    -- the device joined with the team's password or the organiser put it there.
+    CREATE TABLE instances (
         id          TEXT    PRIMARY KEY,
+        team_id     INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
         device_id   TEXT    NOT NULL REFERENCES devices(id),
-        seq         INTEGER NOT NULL,
-        action      TEXT    NOT NULL,
-        params_json TEXT    NOT NULL,
-        signature   TEXT    NOT NULL,
-        state       TEXT    NOT NULL DEFAULT 'pending'
-                    CHECK (state IN ('pending', 'delivered', 'done', 'failed', 'refused', 'cancelled', 'expired')),
-        detail      TEXT,
-        created_by  TEXT    NOT NULL,
-        created_at  REAL    NOT NULL,
+        joined_by   TEXT    NOT NULL DEFAULT 'device' CHECK (joined_by IN ('device', 'organiser')),
+        revoked     INTEGER NOT NULL DEFAULT 0,
+        joined_at   REAL    NOT NULL
+    );
+    CREATE INDEX idx_instances_team_live ON instances(team_id, revoked, joined_at);
+    CREATE INDEX idx_instances_device ON instances(device_id, revoked);
+
+    -- A solve the organiser removes is voided, not deleted: it stays on the
+    -- team's record (so the device does not report it again) but scores 0.
+    CREATE TABLE solves (
+        id           INTEGER PRIMARY KEY,
+        team_id      INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+        challenge_id INTEGER NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
+        instance_id  TEXT    REFERENCES instances(id) ON DELETE SET NULL,
+        client_time  REAL,
+        received_at  REAL    NOT NULL,
+        voided       INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (team_id, challenge_id)
+    );
+    CREATE INDEX idx_solves_received ON solves(received_at);
+    CREATE INDEX idx_solves_challenge ON solves(challenge_id, received_at);
+
+    -- Audit log of every submission, correct or not. Wrong flags never come
+    -- from an unmodified landing page (it validates locally before forwarding),
+    -- so they are a strong hint that someone is talking to the API directly.
+    -- Deleting a team keeps its trail: team_id becomes NULL, team_name is a
+    -- snapshot, and device_id still names the device.
+    CREATE TABLE submissions (
+        id            INTEGER PRIMARY KEY,
+        event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        team_id       INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+        team_name     TEXT,
+        instance_id   TEXT    REFERENCES instances(id) ON DELETE SET NULL,
+        device_id     TEXT    REFERENCES devices(id),
+        challenge_key TEXT    NOT NULL,
+        result        TEXT    NOT NULL,
+        remote_addr   TEXT,
+        received_at   REAL    NOT NULL
+    );
+    CREATE INDEX idx_submissions_event ON submissions(event_id, received_at);
+    CREATE INDEX idx_submissions_team ON submissions(team_id, result);
+
+    -- Ids are never reused: clients ask for "newer than the last id I saw".
+    CREATE TABLE announcements (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id   INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        message    TEXT    NOT NULL,
+        created_at REAL    NOT NULL
+    );
+
+    -- Every organiser action. event_id has no foreign key on purpose: the log
+    -- must outlive a deleted event.
+    CREATE TABLE admin_log (
+        id         INTEGER PRIMARY KEY,
+        event_id   INTEGER,
+        action     TEXT    NOT NULL,
+        details    TEXT    NOT NULL DEFAULT '',
+        actor      TEXT    NOT NULL,
+        created_at REAL    NOT NULL
+    );
+    CREATE INDEX idx_admin_log_event ON admin_log(event_id, created_at);
+
+    -- Admin sessions live server side as well, so logging out ends the
+    -- session even if someone copied the cookie.
+    CREATE TABLE admin_sessions (
+        id         TEXT PRIMARY KEY,
+        created_at REAL NOT NULL,
+        ended_at   REAL
+    );
+
+    -- One-time login links from the command line: the way in that a login
+    -- lockout cannot block.
+    CREATE TABLE login_links (
+        token_hash TEXT PRIMARY KEY,
+        expires_at REAL NOT NULL,
+        used_at    REAL
+    );
+
+    -- Signed, sequenced jobs for devices (docs/MGMT_DESIGN.md, "Jobs").
+    CREATE TABLE jobs (
+        id           TEXT    PRIMARY KEY,
+        device_id    TEXT    NOT NULL REFERENCES devices(id),
+        seq          INTEGER NOT NULL,
+        action       TEXT    NOT NULL,
+        params_json  TEXT    NOT NULL,
+        signature    TEXT    NOT NULL,
+        state        TEXT    NOT NULL DEFAULT 'pending'
+                     CHECK (state IN ('pending', 'delivered', 'done', 'failed', 'refused', 'cancelled', 'expired')),
+        detail       TEXT,
+        created_by   TEXT    NOT NULL,
+        created_at   REAL    NOT NULL,
         delivered_at REAL,
-        finished_at REAL,
+        finished_at  REAL,
         UNIQUE (device_id, seq)
     );
-    CREATE INDEX jobs_device_state ON jobs(device_id, state);
+    CREATE INDEX idx_jobs_device_state ON jobs(device_id, state);
 
     CREATE TABLE job_logs (
         id          INTEGER PRIMARY KEY,
@@ -370,40 +294,7 @@ def prune(path, days=30):
         conn.close()
 
 
-def adopt_legacy(path):
-    """
-    Take over the database of a server from before the rename: when only the
-    old file exists next to `path`, move it into place.
-
-    It is opened, checkpointed and closed first. SQLite removes the -wal and
-    -shm files when its last connection closes, so after that the main file
-    holds everything, including writes a crashed server left in the WAL. If
-    they are still there, another process has the old file open (an old
-    server on the same volume); then the start fails instead of splitting the
-    data in two.
-    """
-    legacy = os.path.join(os.path.dirname(path), LEGACY_DATABASE_NAME)
-    with open(f"{path}.migrate-lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if os.path.exists(path) or not os.path.exists(legacy):
-            return False
-        conn = sqlite3.connect(legacy, isolation_level=None)
-        try:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        finally:
-            conn.close()
-        if any(os.path.exists(legacy + suffix) for suffix in ("-wal", "-shm")):
-            raise RuntimeError(f"{legacy} is still in use by another process; stop it before starting "
-                               "CybICS-mgmt.")
-        if os.path.exists(f"{legacy}.migrate-lock"):
-            os.unlink(f"{legacy}.migrate-lock")
-        os.rename(legacy, path)
-    log.warning("adopted the database of CybICS-CTF: %s is now %s", legacy, path)
-    return True
-
-
 def init_app(app):
-    adopt_legacy(app.config["DATABASE"])
     migrate(app.config["DATABASE"])
     prune(app.config["DATABASE"])
     app.teardown_appcontext(close_db)

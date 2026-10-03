@@ -59,7 +59,12 @@ def fleet_device(device_id):
                            instances=fleet.device_instances(db, device_id), actions=jobs.ACTIONS,
                            allowed=jobs.allowed_actions(device), services=services,
                            blocked=jobs.device_problem(device, signer.fingerprint),
-                           signer=signer, jobs=jobs.list_jobs(db, device_id))
+                           signer=signer, jobs=jobs.list_jobs(db, device_id),
+                           # Teams the organiser can put the device into (ctf/admin.py does it).
+                           teams=db.execute("""SELECT t.id, t.name, e.name AS event FROM teams t
+                                               JOIN events e ON e.id = t.event_id
+                                               WHERE e.state != 'finished' AND t.banned = 0
+                                               ORDER BY e.created_at DESC, t.name LIMIT 500""").fetchall())
 
 
 @bp.post("/fleet/devices/<device_id>")

@@ -1,9 +1,9 @@
 """
 JSON API for CybICS installations (/api/v1). The contract is documented in
 docs/API.md. This module holds the blueprint and what every endpoint shares;
-the CTF endpoints live in ctf/api.py.
+the device endpoints live in fleet/api.py, the CTF ones in ctf/api.py.
 
-Instances authenticate with the bearer token they receive at enrolment. All
+Devices authenticate with the bearer token they receive at enrolment. All
 errors come back as {"error": {"code": ..., "message": ...}} so the landing
 page can show the message to the user unchanged.
 """
@@ -15,10 +15,13 @@ from .errors import MgmtError
 from .security import limiter
 
 API_VERSION = 1
-# What this server offers, for clients that can use more than the CTF.
-FEATURES = ("ctf", "fleet")
 
 bp = Blueprint("api", __name__, url_prefix="/api/v1")
+
+# Parts of the heartbeat answer that other parts of the server add: each is a
+# callable (db, device, request body) -> dict merged into the answer. The CTF
+# part adds "ctf" this way, so the fleet code never imports it.
+HEARTBEAT_PARTS = []
 
 
 @bp.errorhandler(MgmtError)
@@ -48,10 +51,6 @@ def rate_limit(key, limit_name):
 
 @bp.get("/info")
 def info():
-    """
-    Unauthenticated; the landing page's 'Test connection' button calls this.
-    Deployed clients check service == "cybics-ctf": it never changes in v1.
-    """
-    return jsonify({"service": "cybics-ctf", "product": "cybics-mgmt", "features": list(FEATURES),
-                    "name": current_app.config["SERVER_NAME_DISPLAY"],
+    """Unauthenticated; the landing page's 'Test connection' button calls this."""
+    return jsonify({"service": "cybics-mgmt", "name": current_app.config["SERVER_NAME_DISPLAY"],
                     "version": __version__, "api_version": API_VERSION, "server_time": now()})
