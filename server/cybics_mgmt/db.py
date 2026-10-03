@@ -1,5 +1,5 @@
 """
-SQLite storage for the central CTF server.
+SQLite storage for CybICS-mgmt.
 
 One database file holds every event. SQLite with WAL is plenty for the load a
 CTF produces (a few hundred instances sending a heartbeat every 30 s), and it
@@ -9,10 +9,18 @@ Schema changes are applied as numbered migrations tracked in PRAGMA user_version
 Append to MIGRATIONS; never edit a migration that has shipped.
 """
 import fcntl
+import logging
+import os
 import sqlite3
 import time
 
 from flask import current_app, g
+
+log = logging.getLogger("cybics_mgmt")
+
+DATABASE_NAME = "cybics-mgmt.sqlite"
+# The file name before the rename to CybICS-mgmt; adopted once at start.
+LEGACY_DATABASE_NAME = "cybics-ctf.sqlite"
 
 MIGRATIONS = [
     # 1: initial schema
@@ -275,7 +283,40 @@ def prune(path, days=30):
         conn.close()
 
 
+def adopt_legacy(path):
+    """
+    Take over the database of a server from before the rename: when only the
+    old file exists next to `path`, move it into place.
+
+    It is opened, checkpointed and closed first. SQLite removes the -wal and
+    -shm files when its last connection closes, so after that the main file
+    holds everything, including writes a crashed server left in the WAL. If
+    they are still there, another process has the old file open (an old
+    server on the same volume); then the start fails instead of splitting the
+    data in two.
+    """
+    legacy = os.path.join(os.path.dirname(path), LEGACY_DATABASE_NAME)
+    with open(f"{path}.migrate-lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.path.exists(path) or not os.path.exists(legacy):
+            return False
+        conn = sqlite3.connect(legacy, isolation_level=None)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
+        if any(os.path.exists(legacy + suffix) for suffix in ("-wal", "-shm")):
+            raise RuntimeError(f"{legacy} is still in use by another process; stop it before starting "
+                               "CybICS-mgmt.")
+        if os.path.exists(f"{legacy}.migrate-lock"):
+            os.unlink(f"{legacy}.migrate-lock")
+        os.rename(legacy, path)
+    log.warning("adopted the database of CybICS-CTF: %s is now %s", legacy, path)
+    return True
+
+
 def init_app(app):
+    adopt_legacy(app.config["DATABASE"])
     migrate(app.config["DATABASE"])
     prune(app.config["DATABASE"])
     app.teardown_appcontext(close_db)

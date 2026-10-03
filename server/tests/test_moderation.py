@@ -9,8 +9,9 @@ import time
 import pytest
 
 from conftest import CATALOG, FLAGS, auth, enroll
-from cybics_ctf import create_app, ctf
-from cybics_ctf.db import MIGRATIONS, connect, get_db, migrate
+from cybics_mgmt import create_app
+from cybics_mgmt.ctf import logic as ctf
+from cybics_mgmt.db import MIGRATIONS, connect, get_db, migrate
 
 CSRF = {"csrf": "csrf-test"}
 
@@ -239,7 +240,7 @@ def test_forged_session_flag_is_not_enough(client):
 
 
 def test_admin_actions_are_logged(admin, event, caplog):
-    with caplog.at_level("INFO", logger="cybics_ctf"):
+    with caplog.at_level("INFO", logger="cybics_mgmt"):
         admin.post(f"/admin/events/{event['id']}/state", data={**CSRF, "state": "paused"})
     assert any("event_state" in r.getMessage() for r in caplog.records)
 
@@ -247,8 +248,8 @@ def test_admin_actions_are_logged(admin, event, caplog):
 # ---------- configuration and storage ----------
 
 def test_generated_secrets_are_private_and_stable(tmp_path, monkeypatch):
-    monkeypatch.delenv("CTF_ADMIN_PASSWORD", raising=False)
-    monkeypatch.delenv("CTF_SECRET_KEY", raising=False)
+    monkeypatch.delenv("MGMT_ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("MGMT_SECRET_KEY", raising=False)
     first = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite")})
     second = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite")})
     assert first.config["ADMIN_PASSWORD"] == second.config["ADMIN_PASSWORD"]
@@ -302,7 +303,7 @@ def test_cli_set_state_errors_are_readable(app):
 
 def test_spoofed_board_uid_cannot_revoke_another_team(client, event, admin, caplog):
     victim = enroll(client, event, team="Victims", kind="physical", device_uid="0042001a3133").get_json()
-    with caplog.at_level("WARNING", logger="cybics_ctf"):
+    with caplog.at_level("WARNING", logger="cybics_mgmt"):
         enroll(client, event, team="Attackers", kind="physical", device_uid="0042001a3133")
     assert client.post("/api/v1/heartbeat", headers=auth(victim["token"]), json={}).status_code == 200
     assert any("also live in team" in r.getMessage() for r in caplog.records)
@@ -386,8 +387,8 @@ def test_reimport_keeps_organiser_changes(event, app):
 
 
 def test_proxy_headers_only_from_the_proxy(tmp_path, monkeypatch):
-    monkeypatch.setenv("CTF_TRUST_PROXY", "1")
-    monkeypatch.setenv("CTF_FORWARDED_ALLOW_IPS", "10.0.0.0/8")
+    monkeypatch.setenv("MGMT_TRUST_PROXY", "1")
+    monkeypatch.setenv("MGMT_FORWARDED_ALLOW_IPS", "10.0.0.0/8")
     app = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite"),
                       "SECRET_KEY": "k", "ADMIN_PASSWORD": "p"})
 
@@ -436,7 +437,7 @@ def test_migrations_are_serialised(tmp_path):
 
 
 def test_rate_limiter_forgets_idle_keys():
-    from cybics_ctf.security import RateLimiter
+    from cybics_mgmt.security import RateLimiter
     limiter = RateLimiter()
     limiter.IDLE = 0
     limiter.PRUNE_EVERY = 1
@@ -449,7 +450,7 @@ def test_rate_limiter_forgets_idle_keys():
 
 @pytest.mark.parametrize("content", ["", "   \n", "short"])
 def test_unusable_admin_password_file_is_replaced(tmp_path, monkeypatch, content):
-    monkeypatch.delenv("CTF_ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("MGMT_ADMIN_PASSWORD", raising=False)
     (tmp_path / "admin_password").write_text(content)
     app = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite")})
     assert len(app.config["ADMIN_PASSWORD"]) >= 16
@@ -460,13 +461,13 @@ def test_unusable_admin_password_file_is_replaced(tmp_path, monkeypatch, content
 
 
 def test_short_admin_password_from_env_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setenv("CTF_ADMIN_PASSWORD", "abc")
+    monkeypatch.setenv("MGMT_ADMIN_PASSWORD", "abc")
     with pytest.raises(RuntimeError):
         create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite")})
 
 
 def test_empty_expected_password_never_matches(app):
-    from cybics_ctf.security import check_admin_password
+    from cybics_mgmt.security import check_admin_password
     with app.app_context():
         app.config["ADMIN_PASSWORD"] = ""
         assert not check_admin_password("")
@@ -517,7 +518,7 @@ def test_csv_exports_neutralise_formulas(admin, client, event):
 
 
 def test_solves_page_filters_and_pages(admin, client, event, app, monkeypatch):
-    import cybics_ctf.admin as admin_module
+    import cybics_mgmt.ctf.admin as admin_module
     monkeypatch.setattr(admin_module, "PAGE_SIZE", 1)
     a = enroll(client, event, team="Alpha").get_json()
     b = enroll(client, event, team="Bravo").get_json()
@@ -677,8 +678,8 @@ def test_non_ascii_case_lookalike_is_refused(client, event):
 
 
 def test_x_forwarded_host_is_ignored(tmp_path, monkeypatch):
-    monkeypatch.setenv("CTF_TRUST_PROXY", "1")
-    monkeypatch.setenv("CTF_FORWARDED_ALLOW_IPS", "10.0.0.0/8")
+    monkeypatch.setenv("MGMT_TRUST_PROXY", "1")
+    monkeypatch.setenv("MGMT_FORWARDED_ALLOW_IPS", "10.0.0.0/8")
     app = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite"),
                       "SECRET_KEY": "k", "ADMIN_PASSWORD": "p" * 16})
 
@@ -717,7 +718,9 @@ def test_backup_into_a_directory_with_rotation(app, tmp_path):
     result = runner.invoke(args=["backup", str(target), "--keep", "2"])
     assert result.exit_code == 0, result.output
     files = sorted(p.name for p in target.iterdir())
+    # Backups from before the rename age out together with the new ones.
     assert len(files) == 2 and "cybics-ctf-20260101-000000.sqlite" not in files
+    assert any(f.startswith("cybics-mgmt-") for f in files)
 
 
 
@@ -749,7 +752,7 @@ def test_enrol_guard_counts_only_wrong_passwords_and_can_be_cleared(client, even
 def test_new_teams_need_long_passwords_existing_ones_keep_working(client, event, app):
     assert enroll(client, event, team="Short", password="short").status_code == 400
     with app.app_context():
-        from cybics_ctf.security import hash_password
+        from cybics_mgmt.security import hash_password
         get_db().execute("INSERT INTO teams (event_id, name, password_hash, created_at) VALUES (?, ?, ?, 0)",
                          (event["id"], "Legacy", hash_password("abcd")))
     assert enroll(client, event, team="Legacy", password="abcd").status_code == 201
@@ -780,7 +783,7 @@ def test_ordinary_status_is_kept(client, enrolled, app):
 # ---------- review round 7: enrolment cost, redirects, catalog ----------
 
 def test_hashing_slot_timeout_answers_busy(client, event, monkeypatch):
-    import cybics_ctf.security as security
+    import cybics_mgmt.security as security
     monkeypatch.setattr(security, "HASH_WAIT", 0.01)
     held = [security._hashing.acquire() for _ in range(2)]   # both slots busy
     try:
@@ -804,7 +807,7 @@ def test_instances_per_team_are_capped(client, event, monkeypatch):
 def test_disqualified_team_costs_no_hashing(client, enrolled, app, monkeypatch):
     with app.app_context():
         ctf.set_team_banned(get_db(), enrolled["team"]["id"], True)
-    import cybics_ctf.security as security
+    import cybics_mgmt.security as security
 
     def no_hashing(*_a):
         raise AssertionError("hashed for a banned team")
@@ -887,7 +890,7 @@ def test_enrol_and_leave_loops_are_capped_per_team(client, event, monkeypatch):
 
 def test_team_deleted_mid_enrolment_is_not_recreated_silently(client, event, app, monkeypatch):
     enroll(client, event, team="Gone Team", password="gone-pass-1")
-    import cybics_ctf.ctf as ctf_module
+    import cybics_mgmt.ctf.logic as ctf_module
     real_verify = ctf_module.verify_password
 
     def verify_then_delete(*args):
@@ -903,7 +906,7 @@ def test_team_deleted_mid_enrolment_is_not_recreated_silently(client, event, app
 
 
 def test_short_secret_key_from_env_is_refused(tmp_path, monkeypatch):
-    monkeypatch.setenv("CTF_SECRET_KEY", "short")
+    monkeypatch.setenv("MGMT_SECRET_KEY", "short")
     with pytest.raises(RuntimeError):
         create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite"),
                     "ADMIN_PASSWORD": "p" * 16})
@@ -953,9 +956,9 @@ def test_login_link_uses_public_url(app):
 
 
 def test_weak_admin_password_needs_explicit_opt_in(tmp_path, monkeypatch, caplog):
-    monkeypatch.setenv("CTF_ADMIN_PASSWORD", "admin")
-    monkeypatch.setenv("CTF_ALLOW_WEAK_ADMIN_PASSWORD", "1")
-    with caplog.at_level("WARNING", logger="cybics_ctf"):
+    monkeypatch.setenv("MGMT_ADMIN_PASSWORD", "admin")
+    monkeypatch.setenv("MGMT_ALLOW_WEAK_ADMIN_PASSWORD", "1")
+    with caplog.at_level("WARNING", logger="cybics_mgmt"):
         app = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite")})
     assert app.config["ADMIN_PASSWORD"] == "admin"
     assert any("Never run an event like this" in r.getMessage() for r in caplog.records)

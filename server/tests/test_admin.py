@@ -3,8 +3,8 @@ import io
 import json
 
 from conftest import ADMIN_PASSWORD, CATALOG, FLAGS, auth, enroll, login
-from cybics_ctf import ctf
-from cybics_ctf.db import get_db
+from cybics_mgmt.ctf import logic as ctf
+from cybics_mgmt.db import get_db
 
 CSRF = {"csrf": "csrf-test"}
 

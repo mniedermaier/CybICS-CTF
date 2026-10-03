@@ -30,9 +30,15 @@ Base path: `/api/v1`. All request and response bodies are JSON.
 Unauthenticated. The landing page's **Test connection** button calls this.
 
 ```json
-{"service": "cybics-ctf", "name": "CybICS CTF", "version": "0.1.0", "api_version": 1,
- "server_time": 1790844304.29}
+{"service": "cybics-ctf", "product": "cybics-mgmt", "features": ["ctf"], "name": "CybICS-mgmt",
+ "version": "0.1.0", "api_version": 1, "server_time": 1790844304.29}
 ```
+
+- `service` is `"cybics-ctf"` and stays so in v1, also after the rename to CybICS-mgmt: deployed
+  clients compare it to tell this server from any other.
+- `product` and `features` were added with the rename. `features` lists what the server offers
+  beyond the v1 CTF endpoints, so newer clients can check before they use it. Clients must ignore
+  values they do not know.
 
 ## `POST /enroll`
 

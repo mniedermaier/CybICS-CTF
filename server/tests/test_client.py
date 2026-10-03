@@ -1,5 +1,5 @@
 """
-The reference client (client/cybics_ctf_client.py) against a real HTTP server,
+The reference client (client/cybics_mgmt_client.py) against a real HTTP server,
 the way CybICS' landing page will use it.
 """
 import threading
@@ -8,9 +8,9 @@ import pytest
 from werkzeug.serving import make_server
 
 from conftest import FLAGS
-from cybics_ctf import ctf
-from cybics_ctf.db import get_db
-from cybics_ctf_client import CTFClient, CTFClientError
+from cybics_mgmt.ctf import logic as ctf
+from cybics_mgmt.db import get_db
+from cybics_mgmt_client import CTFClient, CTFClientError
 
 
 @pytest.fixture
@@ -529,7 +529,7 @@ def test_solves_held_at_the_end_count_if_the_event_is_reopened(server, event, tm
 
 @pytest.mark.parametrize("value", ["30s", float("nan"), [30], None, True, -5, 10**9])
 def test_garbage_heartbeat_interval_is_tamed(value):
-    from cybics_ctf_client import _interval
+    from cybics_mgmt_client import _interval
     assert 5 <= _interval(value) <= 3600
 
 

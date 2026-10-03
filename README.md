@@ -1,6 +1,6 @@
 <p align="center">
   <img alt="CybICS Logo" src="docs/pics/CybICS_logo.png" height="120" />
-  <p align="center"><strong>CTF</strong> &middot; The central scoreboard and event server for CybICS.</p>
+  <p align="center"><strong>mgmt</strong> &middot; The central server for CybICS: CTF events today, fleet management next.</p>
 </p>
 
 ---
@@ -18,13 +18,22 @@
 
 ---
 
-## What is CybICS-CTF?
+## What is CybICS-mgmt?
 
 [CybICS](https://github.com/mniedermaier/CybICS) is an open-source training platform for industrial
 control system security. It runs virtually in Docker or on a Raspberry Pi with a custom PCB, and it
 ships with 22 capture-the-flag challenges.
 
-CybICS-CTF turns many CybICS instances into **one event**. Participants enrol their CybICS from its
+CybICS-mgmt is the central server for many CybICS installations. It has two parts:
+
+- **CTF events**, ready today: many CybICS instances become **one event**.
+- **Fleet management**, in progress: every CybICS installation, virtual or physical, in one overview,
+  with telemetry and, where the device allows it, remote actions such as restarting services. The
+  design and the plan are in [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md).
+
+CybICS-mgmt was called CybICS-CTF until October 2026; see [Upgrading from CybICS-CTF](#upgrading-from-cybics-ctf).
+
+For CTF events, CybICS-mgmt turns many CybICS instances into **one event**. Participants enrol their CybICS from its
 landing page, virtual or physical alike, and every solved challenge appears on a shared, animated
 scoreboard. The organiser gets one place to run the workshop: teams, instances, moderation and
 announcements.
@@ -33,7 +42,7 @@ announcements.
 that is never enrolled makes no network calls. An enrolled instance keeps working if the server goes
 away, and reports what it missed when the server comes back.
 
-### Why CybICS-CTF?
+### Why CybICS-mgmt?
 
 - ✅ **Projector-ready scoreboard**: ranks glide when teams overtake each other, scores count up, and
   first bloods take over the screen. It fills exactly one screen, never shows a scrollbar, and scrolls
@@ -52,11 +61,12 @@ away, and reports what it missed when the server comes back.
 
 ## Table of Contents
 
-- [What is CybICS-CTF?](#what-is-cybics-ctf)
+- [What is CybICS-mgmt?](#what-is-cybics-mgmt)
 - [Screenshots](#screenshots)
 - [Status](#status)
 - [Quick Start](#-quick-start)
 - [Running an Event](#-running-an-event)
+- [Upgrading from CybICS-CTF](#upgrading-from-cybics-ctf)
 - [Configuration](#%EF%B8%8F-configuration)
 - [How It Works](#-how-it-works)
 - [Documentation](#documentation)
@@ -97,12 +107,12 @@ scoreboard URL to pin one on a projector.
 
 | Part | State |
 |---|---|
-| Server: API, admin UI, scoreboard, moderation, audit | ✅ Ready |
-| Reference client (`client/cybics_ctf_client.py`) | ✅ Ready, tested on Python 3.9 and 3.12 |
-| CybICS landing page: **Settings → Central CTF server** | 🚧 Not yet in CybICS. The changes are specified in [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md) |
-| CybICS Raspberry Pi: second Wi-Fi interface for the uplink | 🚧 Specified in [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#2-physical-device-second-wi-fi-interface) |
-
-Until the CybICS side lands, instances can be enrolled with the reference client directly.
+| CTF: API, admin UI, scoreboard, moderation, audit | ✅ Ready |
+| Reference client (`client/cybics_mgmt_client.py`) | ✅ Ready, tested on Python 3.9 and 3.12 |
+| CybICS landing page: **Settings → Central CTF server** | ✅ In CybICS v1.2.4 |
+| CybICS Raspberry Pi: second Wi-Fi interface for the uplink | ✅ In CybICS v1.2.4 |
+| Fleet: device overview across events | 🚧 Phase 1 of [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md) |
+| Fleet: remote actions on devices that allow them | 🚧 Phase 2 of [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md), needs a CybICS release |
 
 ---
 
@@ -123,8 +133,8 @@ cp .env.example .env        # optional: adjust settings
 docker compose up -d --build
 ```
 
-Open **`http://<host>:8000/admin`** and log in. Without `CTF_ADMIN_PASSWORD`, a password is generated
-on first start; read it with `docker compose exec ctf-server cat /data/admin_password`.
+Open **`http://<host>:8000/admin`** and log in. Without `MGMT_ADMIN_PASSWORD`, a password is generated
+on first start; read it with `docker compose exec server cat /data/admin_password`.
 
 ### Your first event
 
@@ -142,10 +152,10 @@ on first start; read it with `docker compose exec ctf-server cat /data/admin_pas
 The same from the command line:
 
 ```bash
-docker compose exec ctf-server flask --app cybics_ctf create-event workshop "CybICS Workshop"
-docker compose exec -T ctf-server flask --app cybics_ctf import-catalog workshop - \
+docker compose exec server flask --app cybics_mgmt create-event workshop "CybICS Workshop"
+docker compose exec -T server flask --app cybics_mgmt import-catalog workshop - \
     < ../CybICS/software/landing/ctf_config.json
-docker compose exec ctf-server flask --app cybics_ctf set-state workshop running
+docker compose exec server flask --app cybics_mgmt set-state workshop running
 ```
 
 The containers' root filesystems are read-only, so the catalog is piped in on stdin (`-`).
@@ -172,7 +182,7 @@ Failed admin logins are limited per address. If a participant on the same networ
 locked, get a one-time login link from the server's shell. It is valid for 10 minutes and works once:
 
 ```bash
-docker compose exec ctf-server flask --app cybics_ctf login-link
+docker compose exec server flask --app cybics_mgmt login-link
 ```
 
 Once logged in, the *Events* page lists every address that currently hits a limit, and one click
@@ -181,8 +191,8 @@ clears them all.
 ### Backups
 
 ```bash
-docker compose exec ctf-server flask --app cybics_ctf backup /data/backup-$(date +%F-%H%M).sqlite
-docker compose cp ctf-server:/data/backup-<timestamp>.sqlite .
+docker compose exec server flask --app cybics_mgmt backup /data/backup-$(date +%F-%H%M).sqlite
+docker compose cp server:/data/backup-<timestamp>.sqlite .
 ```
 
 `backup` uses SQLite's `VACUUM INTO` and is safe while the server runs. Do not copy the database file
@@ -190,7 +200,7 @@ directly; it runs in WAL mode. For rolling backups during an event, give `backup
 number of files to keep, from a cron entry on the host:
 
 ```
-*/15 * * * * cd /path/to/CybICS-CTF && docker compose exec -T ctf-server sh -c 'mkdir -p /data/backups && flask --app cybics_ctf backup /data/backups --keep 96'
+*/15 * * * * cd /path/to/CybICS-mgmt && docker compose exec -T server sh -c 'mkdir -p /data/backups && flask --app cybics_mgmt backup /data/backups --keep 96'
 ```
 
 Copy the backups off the host now and then: they live on the same volume as the database.
@@ -201,17 +211,17 @@ On an isolated event Wi-Fi, plain HTTP through the bundled proxy is fine. Anywhe
 proxy in front, for example Caddy on the same host:
 
 ```
-ctf.example.org {
+mgmt.example.org {
     reverse_proxy 127.0.0.1:8000
 }
 ```
 
-and start the stack with `CTF_BIND=127.0.0.1 CTF_OUTER_PROXY=172.29.84.1 CTF_SECURE_COOKIES=1`.
+and start the stack with `MGMT_BIND=127.0.0.1 MGMT_OUTER_PROXY=172.29.84.1 MGMT_SECURE_COOKIES=1`.
 `172.29.84.1` is the gateway of the stack's network, where nginx sees a proxy on the host come from.
 
 > [!IMPORTANT]
 > Docker publishes ports past host firewalls such as `ufw`. A port bound to `0.0.0.0` is reachable from
-> the network even if `ufw` does not allow it. Use `CTF_BIND=127.0.0.1` when only this machine, or a
+> the network even if `ufw` does not allow it. Use `MGMT_BIND=127.0.0.1` when only this machine, or a
 > proxy on it, should reach the server.
 
 The bundled nginx has no per-address connection cap on purpose: a classroom, the projector and the
@@ -224,10 +234,40 @@ iptables -I DOCKER-USER -p tcp --dport 8000 --syn -m connlimit --connlimit-above
 
 ---
 
+## Upgrading from CybICS-CTF
+
+The rename keeps deployed CybICS releases working: the API, the `service` value they check and every
+answer are unchanged. Existing installations need one step, because the Compose project now has a
+fixed name and with it a new volume, `cybics-mgmt_data`. The old one is named after the directory
+CybICS-CTF was checked out into, usually `cybics-ctf_ctf-data` (`docker volume ls` shows it):
+
+```bash
+cd /path/to/CybICS-CTF && docker compose down          # stop the old stack (keeps its volume)
+git pull                                               # or clone CybICS-mgmt
+docker volume create cybics-mgmt_data
+docker run --rm -v cybics-ctf_ctf-data:/from:ro -v cybics-mgmt_data:/to alpine cp -a /from/. /to/
+docker compose up -d --build
+```
+
+On its first start the server moves `cybics-ctf.sqlite` to `cybics-mgmt.sqlite` and logs it. The
+admin password, the session key, every event and every enrolled instance carry over. The old volume
+stays as it was; remove it with `docker volume rm cybics-ctf_ctf-data` once you are happy.
+
+Also renamed, with the old names still accepted:
+
+- settings: `MGMT_*` instead of `CTF_*`;
+- the CLI: `flask --app cybics_mgmt` instead of `flask --app cybics_ctf`;
+- the Compose service: `server` instead of `ctf-server` (`docker compose exec server ...`). This one
+  has no alias, so update scripts that call `ctf-server`;
+- backups: `cybics-mgmt-*.sqlite`; `--keep` also prunes the old `cybics-ctf-*` files.
+
+---
+
 ## ⚙️ Configuration
 
 Every setting can be passed in the shell or in a `.env` file next to `docker-compose.yml`. Start from
-the commented example; `.env` itself is gitignored:
+the commented example; `.env` itself is gitignored. The `CTF_*` names from before the rename still
+work when the `MGMT_*` name is not set:
 
 ```bash
 cp .env.example .env
@@ -235,26 +275,26 @@ cp .env.example .env
 
 | Variable | Default | |
 |---|---|---|
-| `CTF_ADMIN_PASSWORD` | generated | At least 8 characters. If unset, generated on first start and kept in `/data/admin_password`. |
-| `CTF_ALLOW_WEAK_ADMIN_PASSWORD` | `0` | `1` accepts a shorter admin password, for a local test setup only. Logged as a warning at every start. |
-| `CTF_SECRET_KEY` | generated | Session key, at least 16 characters. If unset, generated and kept in `/data/secret_key`. |
-| `CTF_SERVER_NAME` | `CybICS CTF` | Shown in the UI and returned by `/api/v1/info`. |
-| `CTF_PUBLIC_URL` | none | Where organisers reach the server, e.g. `https://ctf.example.org`; used in the links `login-link` prints. |
-| `CTF_HEARTBEAT_INTERVAL` | `30` | Seconds between instance check-ins; the server tells the clients. |
-| `CTF_ONLINE_WINDOW` | `90` | An instance counts as online if it checked in within this many seconds. |
-| `CTF_RATE_ENROLL` | `60` | Wrong team passwords per address per minute before enrolment from it pauses. `0` switches the guard off. |
-| `CTF_RATE_NEW_TEAMS` | `100` | New teams one address may create per 10 minutes. Only teams actually created count. |
-| `CTF_RATE_HEARTBEAT` / `CTF_RATE_SOLVE` | `30` | Requests per instance per minute. |
-| `CTF_RATE_LOGIN` | `10` | Failed admin logins per address per 5 minutes. |
-| `CTF_ADMIN_SESSION_HOURS` | `12` | Admin sessions end after this many hours, on log out, or when the admin password changes. |
-| `CTF_BIND` / `CTF_PORT` | `0.0.0.0` / `8000` | Where the stack's port is published. |
-| `CTF_OUTER_PROXY` | none | Address or CIDR of an outer TLS proxy, as nginx sees it. Client address and `https` are then taken from it, and from nobody else. |
-| `CTF_SECURE_COOKIES` | `0` | `1` when the server is served over HTTPS. |
-| `CTF_SUBNET`, `CTF_PROXY_IP`, `CTF_APP_IP` | `172.29.84.0/24`, `.2`, `.3` | The stack's internal network; change it if it collides with a local one. |
-| `CTF_LOG_LEVEL` | `INFO` | Log level of the server's own log lines. |
+| `MGMT_ADMIN_PASSWORD` | generated | At least 8 characters. If unset, generated on first start and kept in `/data/admin_password`. |
+| `MGMT_ALLOW_WEAK_ADMIN_PASSWORD` | `0` | `1` accepts a shorter admin password, for a local test setup only. Logged as a warning at every start. |
+| `MGMT_SECRET_KEY` | generated | Session key, at least 16 characters. If unset, generated and kept in `/data/secret_key`. |
+| `MGMT_SERVER_NAME` | `CybICS-mgmt` | Shown in the UI and returned by `/api/v1/info`. |
+| `MGMT_PUBLIC_URL` | none | Where organisers reach the server, e.g. `https://mgmt.example.org`; used in the links `login-link` prints. |
+| `MGMT_HEARTBEAT_INTERVAL` | `30` | Seconds between instance check-ins; the server tells the clients. |
+| `MGMT_ONLINE_WINDOW` | `90` | An instance counts as online if it checked in within this many seconds. |
+| `MGMT_RATE_ENROLL` | `60` | Wrong team passwords per address per minute before enrolment from it pauses. `0` switches the guard off. |
+| `MGMT_RATE_NEW_TEAMS` | `100` | New teams one address may create per 10 minutes. Only teams actually created count. |
+| `MGMT_RATE_HEARTBEAT` / `MGMT_RATE_SOLVE` | `30` | Requests per instance per minute. |
+| `MGMT_RATE_LOGIN` | `10` | Failed admin logins per address per 5 minutes. |
+| `MGMT_ADMIN_SESSION_HOURS` | `12` | Admin sessions end after this many hours, on log out, or when the admin password changes. |
+| `MGMT_BIND` / `MGMT_PORT` | `0.0.0.0` / `8000` | Where the stack's port is published. |
+| `MGMT_OUTER_PROXY` | none | Address or CIDR of an outer TLS proxy, as nginx sees it. Client address and `https` are then taken from it, and from nobody else. |
+| `MGMT_SECURE_COOKIES` | `0` | `1` when the server is served over HTTPS. |
+| `MGMT_SUBNET`, `MGMT_PROXY_IP`, `MGMT_APP_IP` | `172.29.84.0/24`, `.2`, `.3` | The stack's internal network; change it if it collides with a local one. |
+| `MGMT_LOG_LEVEL` | `INFO` | Log level of the server's own log lines. |
 
-Outside Docker Compose, `CTF_TRUST_PROXY=1`, `CTF_FORWARDED_ALLOW_IPS` (the proxy's addresses) and
-`CTF_PROXY_HOPS` (number of trusted proxies) configure the forwarded headers, and `CTF_DATA_DIR`
+Outside Docker Compose, `MGMT_TRUST_PROXY=1`, `MGMT_FORWARDED_ALLOW_IPS` (the proxy's addresses) and
+`MGMT_PROXY_HOPS` (number of trusted proxies) configure the forwarded headers, and `MGMT_DATA_DIR`
 (default `./data`) holds the database and the generated secrets.
 
 ---
@@ -265,7 +305,7 @@ Outside Docker Compose, `CTF_TRUST_PROXY=1`, `CTF_FORWARDED_ALLOW_IPS` (the prox
  participants                                                         organiser
 ┌────────────────────────┐   POST /api/v1/enroll     (once)        ┌──────────────────────┐
 │ CybICS (Docker)        │   POST /api/v1/heartbeat  (every 30 s)  │  proxy (nginx)       │
-│  landing ─ client ─────┼──────────────────────────────────────►  │   └─ ctf-server      │
+│  landing ─ client ─────┼──────────────────────────────────────►  │   └─ server          │
 └────────────────────────┘   POST /api/v1/solves     (each solve)  │      Flask + SQLite  │
 ┌────────────────────────┐                                         │                      │
 │ CybICS (Pi + PCB)      │                                         │  /admin              │
@@ -281,7 +321,7 @@ Outside Docker Compose, `CTF_TRUST_PROXY=1`, `CTF_FORWARDED_ALLOW_IPS` (the prox
 - **Fair scoring.** Solves count only while the event is running, are ordered by the server's clock,
   and ties go to the team that reached the score first.
 - **Honest about cheating.** CybICS flags are the same in every installation and printed in the
-  training material, so no server can *prove* a solve. CybICS-CTF makes honest play the easy path and
+  training material, so no server can *prove* a solve. CybICS-mgmt makes honest play the easy path and
   dishonest play visible: enrolled instances only, an audit of every submission, wrong flags flagged,
   and moderation that keeps the evidence.
 
@@ -293,6 +333,7 @@ The full design, the sync protocol and the trust model are in [docs/ARCHITECTURE
 
 | Document | |
 |---|---|
+| [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md) | CybICS-mgmt: the fleet design, its decisions and the plan, the rename's compatibility rules |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | What the investigation of CybICS found, the design, the sync protocol, the trust model, shared-address handling |
 | [docs/API.md](docs/API.md) | The instance API (`/api/v1`): enrolment, heartbeat, solves, scoreboard |
 | [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md) | The changes needed in CybICS: landing settings page, the Pi's second Wi-Fi interface, network isolation |
@@ -302,8 +343,8 @@ The full design, the sync protocol and the trust model are in [docs/ARCHITECTURE
 
 | Path | |
 |---|---|
-| `server/` | The Flask application (`cybics_ctf/`), its Dockerfile and the test suite |
-| `client/cybics_ctf_client.py` | Reference client for CybICS' landing page: one file, standard library only |
+| `server/` | The Flask application (`cybics_mgmt/`, with the CTF part in `cybics_mgmt/ctf/`), its Dockerfile and the test suite |
+| `client/cybics_mgmt_client.py` | Reference client for CybICS' landing page: one file, standard library only |
 | `proxy/` | nginx in front of the app: request buffering, short timeouts, enrolment queue, real client address |
 | `tools/slowloris_check.py` | Checks that one abusive client cannot freeze the server (slow uploads, idle connections, enrolment flood) |
 | `docs/` | Architecture, API, CybICS integration, pictures |
@@ -320,8 +361,8 @@ Contributions are welcome. Please open an issue first for larger changes.
 cd server
 pip install -r requirements-dev.txt
 ruff check ..
-pytest --cov=cybics_ctf --cov=cybics_ctf_client
-flask --app cybics_ctf run --debug      # data goes to ./data
+pytest --cov=cybics_mgmt --cov=cybics_mgmt_client
+flask --app cybics_mgmt run --debug      # data goes to ./data
 ```
 
 The suite covers the API, the admin UI, the CLI, the migrations and the reference client against a
@@ -340,11 +381,11 @@ in [CLAUDE.md](CLAUDE.md). It is written for AI assistants but applies to everyo
 
 ## License
 
-CybICS-CTF is released under the **MIT License**. See [LICENSE](/LICENSE) for details.
+CybICS-mgmt is released under the **MIT License**. See [LICENSE](/LICENSE) for details.
 
 ### Third-Party Components
 
-- **Inter** typeface: SIL Open Font License 1.1 (`server/cybics_ctf/static/fonts/Inter-LICENSE.txt`)
+- **Inter** typeface: SIL Open Font License 1.1 (`server/cybics_mgmt/static/fonts/Inter-LICENSE.txt`)
 - **CybICS logo**: from the [CybICS](https://github.com/mniedermaier/CybICS) project, MIT License
 
 ---

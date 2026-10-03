@@ -11,8 +11,9 @@ import re
 import unicodedata
 import uuid
 
-from .db import now, transaction
-from .security import flag_matches, hash_flag, hash_password, hash_token, new_join_code, new_token, verify_password
+from ..db import now, transaction
+from ..errors import MgmtError
+from ..security import flag_matches, hash_flag, hash_password, hash_token, new_join_code, new_token, verify_password
 
 EVENT_STATES = ("draft", "running", "paused", "finished")
 # Allowed state changes. Nothing goes back to draft once started, so a click
@@ -62,14 +63,8 @@ UNKNOWN_CHALLENGE = "unknown_challenge"
 EVENT_NOT_RUNNING = "event_not_running"
 
 
-class CTFError(Exception):
-    """A request the caller can fix; carries an API error code and HTTP status."""
-
-    def __init__(self, code, message, status=400):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.status = status
+class CTFError(MgmtError):
+    """A CTF request the caller can fix; carries an API error code and HTTP status."""
 
 
 def _text(value, field, required=True):

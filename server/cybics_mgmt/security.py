@@ -21,7 +21,7 @@ from collections import defaultdict, deque
 from flask import abort, current_app, redirect, request, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-log = logging.getLogger("cybics_ctf")
+log = logging.getLogger("cybics_mgmt")
 
 
 def new_token():
@@ -271,7 +271,7 @@ def audit(action, event_id=None, actor=None, **details):
     """
     Record an organiser action: a row in admin_log (shown on the event's Log
     page, survives container recreation) and a log line. Logged at WARNING so
-    raising CTF_LOG_LEVEL never hides it.
+    raising MGMT_LOG_LEVEL never hides it.
     """
     from .db import get_db, now
     actor = actor or f"web {client_ip()}"

@@ -12,7 +12,8 @@ help to find the place again once lines move.
 
 ### Vendor the client
 
-Copy `client/cybics_ctf_client.py` to `software/landing/modules/central_ctf.py`. It needs only the
+Copy `client/cybics_mgmt_client.py` (called `cybics_ctf_client.py` before the rename to CybICS-mgmt)
+to `software/landing/modules/central_ctf.py`. It needs only the
 standard library, so `requirements.txt` stays unchanged. Create one instance at import time, next to
 the other managers (`app.py:44-47` in v1.2.3):
 
