@@ -90,6 +90,16 @@ def _configure_logging():
         log.propagate = False
 
 
+def _ensure_default_code(app):
+    from .fleet import logic as fleet
+    conn = db.connect(app.config["DATABASE"])
+    try:
+        if fleet.ensure_code(conn, app.config["DEFAULT_ENROL_CODE"], "Default for CybICS boards"):
+            log.warning("created the default enrolment code %s", app.config["DEFAULT_ENROL_CODE"].upper())
+    finally:
+        conn.close()
+
+
 def create_app(test_config=None):
     _configure_logging()
     app = Flask(__name__)
@@ -118,6 +128,9 @@ def create_app(test_config=None):
         # devices one address may enrol per 10 minutes.
         RATE_LIMIT_ENROL_CODE=(_env_int("RATE_ENROL_CODE", 60), 60),
         RATE_LIMIT_NEW_DEVICES=(_env_int("RATE_NEW_DEVICES", 100), 600),
+        # An enrolment code created at start if missing: the code CybICS
+        # boards use to enrol on their own on the default network.
+        DEFAULT_ENROL_CODE=(env("DEFAULT_ENROL_CODE") or "").strip(),
         # Requests with an unknown or revoked token, per address. Valid tokens
         # are never limited by this.
         RATE_LIMIT_BAD_TOKEN=(60, 60),
@@ -170,6 +183,8 @@ def create_app(test_config=None):
     from .fleet import admin as _fleet_admin  # noqa: F401
     from .fleet import api as _fleet_api  # noqa: F401
     db.init_app(app)
+    if app.config.get("DEFAULT_ENROL_CODE"):
+        _ensure_default_code(app)
     app.register_blueprint(api.bp)
     app.register_blueprint(admin.bp)
     app.register_blueprint(public.bp)

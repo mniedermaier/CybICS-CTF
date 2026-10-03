@@ -343,3 +343,38 @@ def test_codes_never_collide_with_event_join_codes(app, event, monkeypatch):
     codes = iter([event["join_code"], "UNIQUE23"])
     monkeypatch.setattr(fleet, "new_join_code", lambda: next(codes))
     assert make_code(app)["code"] == "UNIQUE23"
+
+
+# ---------- the default enrolment code ----------
+
+def test_the_default_code_is_created_once_and_never_re_enabled(tmp_path, admin):
+    from conftest import ADMIN_PASSWORD, SIGNING_KEY
+    from cybics_mgmt import create_app
+    config = {"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite"), "SECRET_KEY": "test",
+              "ADMIN_PASSWORD": ADMIN_PASSWORD, "FLEET_SIGNING_KEY": SIGNING_KEY,
+              "DEFAULT_ENROL_CODE": "cybics-boards"}
+    app = create_app(config)
+    client = app.test_client()
+    assert enroll_device(client, "CYBICS-BOARDS", **BOARD).status_code == 201
+    with app.app_context():
+        db = get_db()
+        row = db.execute("SELECT * FROM enrol_codes").fetchone()
+        assert (row["code"], row["uses"]) == ("CYBICS-BOARDS", 1)
+        fleet.set_code_enabled(db, row["id"], False)
+    create_app(config)                                     # a restart
+    with app.app_context():
+        assert get_db().execute("SELECT enabled FROM enrol_codes").fetchone()["enabled"] == 0
+
+
+@pytest.mark.parametrize("code", ["no", "with space", "x" * 17])
+def test_a_malformed_default_code_stops_the_start(tmp_path, code):
+    from conftest import ADMIN_PASSWORD
+    from cybics_mgmt import create_app
+    with pytest.raises(ValueError):
+        create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite"), "SECRET_KEY": "test",
+                    "ADMIN_PASSWORD": ADMIN_PASSWORD, "DEFAULT_ENROL_CODE": code})
+
+
+def test_the_default_code_never_shadows_a_join_code(app, event):
+    with app.app_context(), pytest.raises(ValueError, match="join code"):
+        fleet.ensure_code(get_db(), event["join_code"], "x")

@@ -1,0 +1,7 @@
+docker.io
+# Debian's docker.io has no compose plugin; cybics-mgmt.service runs
+# "docker compose up -d".
+docker-compose
+network-manager
+avahi-daemon
+python3

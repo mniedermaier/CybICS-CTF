@@ -87,6 +87,28 @@ def create_code(db, label, group_id):
     return db.execute("SELECT * FROM enrol_codes WHERE id = ?", (cur.lastrowid,)).fetchone()
 
 
+CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{3,15}$")
+
+
+def ensure_code(db, code, label):
+    """
+    Make sure the enrolment code `code` exists (MGMT_DEFAULT_ENROL_CODE: the
+    code CybICS boards use on their own). Returns True if it was created. An
+    existing code is left as it is, so a code the organiser disabled stays
+    disabled across restarts.
+    """
+    code = str(code).strip().upper()
+    if not CODE_RE.fullmatch(code):
+        raise ValueError("An enrolment code has 4 to 16 letters, digits or dashes.")
+    with transaction(db):
+        if db.execute("SELECT 1 FROM enrol_codes WHERE code = ?", (code,)).fetchone():
+            return False
+        if db.execute("SELECT 1 FROM events WHERE join_code = ?", (code,)).fetchone():
+            raise ValueError(f"{code} is an event's join code.")
+        db.execute("INSERT INTO enrol_codes (code, label, created_at) VALUES (?, ?, ?)", (code, label, now()))
+    return True
+
+
 def set_code_enabled(db, code_id, enabled):
     db.execute("UPDATE enrol_codes SET enabled = ? WHERE id = ?", (int(bool(enabled)), code_id))
 

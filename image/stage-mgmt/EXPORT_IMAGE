@@ -1,0 +1,3 @@
+# Reset the suffix inherited from stage2's EXPORT_IMAGE (IMG_SUFFIX="-lite"),
+# or this image would be named and overwritten like the plain Lite export.
+IMG_SUFFIX=""

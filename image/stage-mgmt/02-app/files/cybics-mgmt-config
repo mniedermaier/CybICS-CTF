@@ -1,0 +1,116 @@
+#!/usr/bin/python3
+"""
+Apply /boot/firmware/cybics-mgmt.txt at boot (cybics-mgmt-config.service).
+
+Runs before NetworkManager and the CybICS-mgmt containers start. Writes the
+access point's SSID and password into its NetworkManager profile, sets the
+Wi-Fi country, and writes the server's settings into /opt/cybics-mgmt/.env.
+Anything not valid is reported and replaced by its default.
+"""
+import os
+import re
+import subprocess
+import sys
+
+BOOT_FILE = "/boot/firmware/cybics-mgmt.txt"
+AP_PROFILE = "/etc/NetworkManager/system-connections/cybics-mgmt-ap.nmconnection"
+ENV_FILE = "/opt/cybics-mgmt/.env"
+PROBLEMS_FILE = "/run/cybics-mgmt/config-problems"
+
+CHECKS = {
+    "WIFI_SSID": (lambda v: 1 <= len(v.encode()) <= 32 and v.isprintable(), "1 to 32 characters"),
+    "WIFI_PASSWORD": (lambda v: re.fullmatch(r"[\x20-\x7e]{8,63}", v), "8 to 63 printable ASCII characters"),
+    "WIFI_COUNTRY": (lambda v: re.fullmatch(r"[A-Z]{2}", v), "a two-letter country code"),
+    "ADMIN_PASSWORD": (lambda v: v == "" or (len(v) >= 8 and "'" not in v and v.isprintable()),
+                       "empty, or at least 8 characters without a ' quote"),
+    "DEFAULT_ENROL_CODE": (lambda v: v == "" or re.fullmatch(r"[A-Z0-9][A-Z0-9-]{3,15}", v),
+                           "empty, or 4 to 16 letters, digits or dashes"),
+    "SERVER_NAME": (lambda v: 1 <= len(v) <= 64 and "'" not in v and v.isprintable(),
+                    "1 to 64 characters without a ' quote"),
+}
+DEFAULTS = {"WIFI_SSID": "cybics-mgmt", "WIFI_PASSWORD": "cybics-mgmt", "WIFI_COUNTRY": "US",
+            "ADMIN_PASSWORD": "", "DEFAULT_ENROL_CODE": "CYBICS-BOARDS", "SERVER_NAME": "CybICS-mgmt"}
+
+
+def read_settings(path, problems):
+    settings = dict(DEFAULTS)
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError as exc:
+        problems.append(f"cannot read {path}: {exc}; using the defaults")
+        return settings
+    for number, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        key, value = key.strip().upper(), value.strip()
+        if not sep or key not in CHECKS:
+            problems.append(f"line {number}: unknown setting {key!r}")
+            continue
+        if key in ("WIFI_COUNTRY", "DEFAULT_ENROL_CODE"):
+            value = value.upper()
+        check, rule = CHECKS[key]
+        if check(value):
+            settings[key] = value
+        else:
+            problems.append(f"line {number}: {key} must be {rule}; keeping {DEFAULTS[key]!r}")
+    return settings
+
+
+def replace_lines(path, values):
+    """Set key=value lines in a NetworkManager keyfile, keeping its comments. True if it changed."""
+    with open(path, encoding="utf-8") as f:
+        old = f.read()
+    new = old
+    for key, value in values.items():
+        new = re.sub(rf"(?m)^{key}=.*$", lambda _m, k=key, v=value: f"{k}={v}", new)
+    if new != old:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new)
+        os.chmod(path, 0o600)
+    return new != old
+
+
+def set_country(country, problems):
+    try:
+        current = subprocess.run(["raspi-config", "nonint", "get_wifi_country"], capture_output=True,
+                                 text=True, timeout=30).stdout.strip()
+        if current != country:
+            subprocess.run(["raspi-config", "nonint", "do_wifi_country", country], check=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        problems.append(f"cannot set the Wi-Fi country to {country}: {exc}")
+
+
+def write_env(settings):
+    lines = [
+        "# Written by cybics-mgmt-config from /boot/firmware/cybics-mgmt.txt at every boot.",
+        "MGMT_PORT=80",
+        f"MGMT_SERVER_NAME='{settings['SERVER_NAME']}'",
+        f"MGMT_DEFAULT_ENROL_CODE='{settings['DEFAULT_ENROL_CODE']}'",
+    ]
+    if settings["ADMIN_PASSWORD"]:
+        lines.append(f"MGMT_ADMIN_PASSWORD='{settings['ADMIN_PASSWORD']}'")
+    os.makedirs(os.path.dirname(ENV_FILE), exist_ok=True)
+    fd = os.open(ENV_FILE + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(ENV_FILE + ".new", ENV_FILE)
+
+
+def main():
+    problems = []
+    settings = read_settings(BOOT_FILE, problems)
+    replace_lines(AP_PROFILE, {"ssid": settings["WIFI_SSID"], "psk": settings["WIFI_PASSWORD"]})
+    set_country(settings["WIFI_COUNTRY"], problems)
+    write_env(settings)
+    os.makedirs(os.path.dirname(PROBLEMS_FILE), exist_ok=True)
+    with open(PROBLEMS_FILE, "w", encoding="utf-8") as f:
+        f.write("".join(p + "\n" for p in problems))
+    for problem in problems:
+        print(f"cybics-mgmt.txt: {problem}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
