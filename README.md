@@ -122,10 +122,10 @@ drawn by `tools/readme_animation.py`; the scoreboard was recorded from a real se
 | Reference client (`client/cybics_mgmt_client.py`) | ✅ Ready, tested on Python 3.9 and 3.12 |
 | Fleet: device overview across events, groups, enrolment codes, putting devices into teams | ✅ Ready |
 | Fleet: remote actions on devices that allow them | ✅ Server and client ready |
-| CybICS landing page: **Settings → CybICS-mgmt** | 🚧 Moving to `MgmtClient` for the CybICS release that replaces v1.2.4; specified in [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#1-landing-service-virtual-and-physical) |
+| CybICS landing page: **Settings → CybICS-mgmt** | 🚧 In review: [CybICS#263](https://github.com/mniedermaier/CybICS/pull/263), for the release that replaces v1.2.4 |
 | CybICS Raspberry Pi: second Wi-Fi interface for the uplink | ✅ In CybICS v1.2.4 (USB Wi-Fi dongle) |
 | Raspberry Pi image of CybICS-mgmt with the `cybics-mgmt` access point | ✅ Built by CI, attached to every release |
-| CybICS boards joining `cybics-mgmt` on their own | 🚧 Specified in [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#the-default-network-cybics-mgmt) |
+| CybICS boards joining `cybics-mgmt` on their own | 🚧 In review: [CybICS#263](https://github.com/mniedermaier/CybICS/pull/263) (with the landing integration) |
 
 ---
 

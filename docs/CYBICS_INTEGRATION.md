@@ -242,24 +242,24 @@ Landing needs it for `device_uid`. Options, simplest first:
 
 ### Uplink profile
 
-Ship this in the image, but disabled. Keyfiles only allow comments on lines of their own, never after
+Ship this in the image, set to the default network (see below). Keyfiles only allow comments on lines of their own, never after
 a value. Example `cybics-ctf-uplink.nmconnection`:
 
 ```ini
 [connection]
 id=cybics-ctf-uplink
 type=wifi
-interface-name=wlan1
+interface-name=ctfwlan0
 autoconnect=true
 
 [wifi]
 mode=infrastructure
-# The event network; editable from the landing page.
-ssid=cybics-ctf
+# The default network of the CybICS-mgmt Pi image; editable from the landing page.
+ssid=cybics-mgmt
 
 [wifi-security]
 key-mgmt=wpa-psk
-psk=change-me
+psk=cybics-mgmt
 
 [ipv4]
 method=auto
