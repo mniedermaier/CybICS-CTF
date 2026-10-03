@@ -40,6 +40,16 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
+      - name: Check the tag against the version
+        # A release v1.2.3 must contain server version 1.2.3; bump __version__ first.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' server/cybics_mgmt/__init__.py)"
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ $VERSION in server/cybics_mgmt/__init__.py"
+            exit 1
+          fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -63,17 +73,21 @@ jobs:
             echo "::error::Image is $((BYTES / 1024 / 1024)) MB, at or above the 2 GiB release asset limit"
             exit 1
           fi
+          sha256sum "$(basename "$IMG")" > "$(basename "$IMG").sha256"
           {
             echo "path=image/deploy/$(basename "$IMG")"
             echo "name=$(basename "$IMG")"
             echo "mb=$((BYTES / 1024 / 1024))"
+            echo "sha256=$(cut -d' ' -f1 "$(basename "$IMG").sha256")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload as workflow artefact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artefact.outputs.name }}
-          path: ${{ steps.artefact.outputs.path }}
+          path: |
+            ${{ steps.artefact.outputs.path }}
+            ${{ steps.artefact.outputs.path }}.sha256
           retention-days: 14
 
       - name: Attach to the release
@@ -84,6 +98,7 @@ jobs:
           IMG: ${{ steps.artefact.outputs.path }}
           IMG_NAME: ${{ steps.artefact.outputs.name }}
           IMG_MB: ${{ steps.artefact.outputs.mb }}
+          IMG_SHA: ${{ steps.artefact.outputs.sha256 }}
         run: |
           set -euo pipefail
           NOTES="$(mktemp)"
@@ -93,6 +108,11 @@ jobs:
           \`$IMG_NAME\` ($IMG_MB MB compressed). One 64-bit image for the Raspberry Pi 3, 4, 5 and
           Zero 2 W: Raspberry Pi OS Lite with the CybICS-mgmt server pre-loaded and a Wi-Fi access
           point that CybICS boards join on their own.
+
+          SHA-256: \`$IMG_SHA\` (also in \`$IMG_NAME.sha256\`; check with \`sha256sum -c\`).
+
+          Without the Raspberry Pi: \`git clone\` this tag and run \`docker compose up -d --build\`
+          (README, Quick Start).
 
           ### Writing it to an SD card
 
@@ -122,12 +142,16 @@ jobs:
           The first boot loads the containers and takes a few minutes; later boots take seconds.
           NOTE
 
+          # A release written by hand before the tag build keeps its text; the
+          # image and its checksum are added. Otherwise the notes above go first,
+          # then GitHub's list of the pull requests merged since the last tag.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$IMG" --clobber
+            gh release upload "$TAG" "$IMG" "$IMG.sha256" --clobber
             gh release view "$TAG" --json body -q .body > /tmp/existing || true
             if [ ! -s /tmp/existing ]; then
               gh release edit "$TAG" --notes-file "$NOTES"
             fi
           else
-            gh release create "$TAG" "$IMG" --title "$TAG" --notes-file "$NOTES"
+            gh release create "$TAG" "$IMG" "$IMG.sha256" --title "CybICS-mgmt $TAG" \
+              --notes-file "$NOTES" --generate-notes
           fi

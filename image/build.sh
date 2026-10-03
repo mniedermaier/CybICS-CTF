@@ -78,7 +78,11 @@ for tarball in "$CONTAINER_DIR"/*.tar; do
 done
 
 step "Preparing pi-gen"
+# The image carries the server's version in its name: <date>-CybICS-mgmt-v1.2.3.img.xz
+VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$REPO_DIR/server/cybics_mgmt/__init__.py")"
+[ -n "$VERSION" ] || fail "Cannot read __version__ from server/cybics_mgmt/__init__.py."
 cp "$SCRIPT_DIR/config" "$PIGEN_DIR/config"
+echo "IMG_NAME=\"CybICS-mgmt-v$VERSION\"" >> "$PIGEN_DIR/config"
 rm -rf "$PIGEN_DIR/stage-mgmt"
 cp -r "$STAGE_DIR" "$PIGEN_DIR/stage-mgmt"
 find "$PIGEN_DIR/stage-mgmt" -name "*.sh" -exec chmod +x {} \;
