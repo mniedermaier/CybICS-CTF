@@ -52,6 +52,71 @@
   {% else %}<p class="muted">Nothing reported yet.</p>{% endif %}
 </div>
 <div class="panel">
+  <h2>Actions</h2>
+  {% if blocked %}
+  <p class="muted">No actions: {{ blocked }}.</p>
+  {% elif not allowed %}
+  <p class="muted">The device allows no actions. Whoever runs it switches them on, one by one, on its CybICS landing page.</p>
+  {% else %}
+  <p class="muted">Jobs are signed with the key <span class="mono" title="{{ signer.fingerprint }}">{{ signer.fingerprint[:16] }}&hellip;</span>,
+    which the device pinned at enrolment. It picks them up at its next check-in; a job not delivered within 24 hours expires.
+    Only the actions the device allows are offered.</p>
+  {% if 'identify' in allowed %}
+  <form method="post" action="{{ url_for('admin.fleet_job_create', device_id=device.id) }}" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="identify">
+    <input type="number" name="seconds" value="60" min="5" max="600" aria-label="Seconds">
+    <button class="secondary" type="submit">Identify</button> <span class="muted">shows "{{ name }}" on its landing page</span>
+  </form>
+  {% endif %}
+  {% if 'message' in allowed %}
+  <form method="post" action="{{ url_for('admin.fleet_job_create', device_id=device.id) }}" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="message">
+    <input type="text" name="text" maxlength="500" size="40" placeholder="Message for the landing page" aria-label="Message" required>
+    <button class="secondary" type="submit">Show message</button>
+  </form>
+  {% endif %}
+  {% if 'restart' in allowed %}
+  <form method="post" action="{{ url_for('admin.fleet_job_create', device_id=device.id) }}" class="row" data-confirm="Restart on this device?">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="restart">
+    <select name="service" aria-label="Service">
+      <option value="all">All CybICS services</option>
+      {% for s in services %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    </select>
+    <button class="secondary" type="submit">Restart</button>
+  </form>
+  {% endif %}
+  {% if 'collect_logs' in allowed %}
+  <form method="post" action="{{ url_for('admin.fleet_job_create', device_id=device.id) }}" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="collect_logs">
+    <button class="secondary" type="submit">Collect logs</button> <span class="muted">the bundle appears in the job list below</span>
+  </form>
+  {% endif %}
+  {% if 'reset_progress' in allowed %}
+  <form method="post" action="{{ url_for('admin.fleet_job_create', device_id=device.id) }}" class="row" data-confirm="Reset the local CTF progress on this device? Solves already on the server stay.">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="reset_progress">
+    <button class="danger" type="submit">Reset local CTF progress</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+<div class="panel">
+  <h2>Jobs</h2>
+  <table>
+    <thead><tr><th class="num">#</th><th>Action</th><th>State</th><th>Result</th><th>Sent</th><th></th></tr></thead>
+    <tbody>
+    {% for j in jobs %}
+      <tr><td class="num mono">{{ j.seq }}</td>
+          <td>{{ j.action }}{% if j.params_json != '{}' %} <span class="mono muted">{{ j.params_json }}</span>{% endif %}</td>
+          <td><span class="badge {{ {'done': 'ok', 'failed': 'bad', 'refused': 'bad', 'pending': 'warn', 'delivered': 'warn'}.get(j.state, '') }}">{{ j.state }}</span></td>
+          <td class="muted">{{ j.detail or '' }}{% if j.logs_size %} <a href="{{ url_for('admin.fleet_job_logs_download', job_id=j.id) }}">logs ({{ (j.logs_size / 1024)|round(1) }} KB)</a>{% endif %}</td>
+          <td class="muted">{{ j.created_at|ago }}<div class="mono">{{ j.created_by }}</div></td>
+          <td>{% if j.state in ('pending', 'delivered') %}<form class="inline" method="post" action="{{ url_for('admin.fleet_job_cancel', job_id=j.id) }}">
+                <input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="secondary" type="submit">Cancel</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">No jobs yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="panel">
   <h2>CTF participation</h2>
   <table>
     <thead><tr><th>Event</th><th>Team</th><th>Enrolled</th><th>Last seen</th><th></th></tr></thead>

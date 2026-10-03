@@ -58,13 +58,15 @@ Never stage `server/data/`, `*.sqlite`, `.env` or anything holding a real admin 
       no request handling, and every function takes the DB connection. Code imports it as
       `from .ctf import logic as ctf`.
     - `api.py`, `admin.py`, `public.py` (the scoreboard), `cli.py` (event commands).
-  - `fleet/`: the fleet part (devices, groups, enrolment codes), built the same way: `logic.py`
-    (never imports the CTF part), `api.py` (`/api/v1/fleet/*`), `admin.py` (`/admin/fleet/*`,
-    endpoints `admin.fleet_*`).
+  - `fleet/`: the fleet part (devices, groups, enrolment codes, jobs), built the same way:
+    `logic.py` (never imports the CTF part), `jobs.py` (the allow-listed actions, signing and
+    delivery), `signing.py` (the RSA key in `/data/fleet_signing_key.pem`, created on first use),
+    `api.py` (`/api/v1/fleet/*`), `admin.py` (`/admin/fleet/*`, endpoints `admin.fleet_*`).
 - `server/cybics_ctf/`: a shim, so `flask --app cybics_ctf` keeps working.
 - `server/tests/`: pytest. `test_client.py` runs the reference client against a live server;
   `test_compat.py` guards the rename's compatibility.
-- `client/cybics_mgmt_client.py`: the reference client that CybICS' landing service vendors.
+- `client/cybics_mgmt_client.py`: the reference client that CybICS' landing service vendors:
+  `CTFClient` and `FleetClient`. `test_fleet_client.py` runs the latter against a live server.
 - `docs/`: `ARCHITECTURE.md` (CTF design and trust model), `MGMT_DESIGN.md` (fleet design and plan),
   `API.md` (the contract) and `CYBICS_INTEGRATION.md` (what has to change on the CybICS side).
 - `docker-compose.yml`, `server/Dockerfile` and `proxy/nginx.conf`: the deployment. nginx (the only
@@ -117,6 +119,18 @@ same way: `docker run --rm -v "$PWD:/src" python:3.12-alpine sh -c 'cd /src && r
   status, and never decides anything. The board UID only *suggests* that two devices are one board.
 - **Fleet organiser actions are audited with an action starting with `fleet_`.** They have no
   event, are listed on the fleet log, and stay off the events page's login list.
+- **Jobs are allow-listed, signed, sequenced actions.** `jobs.ACTIONS` is the whole list, each with
+  a parameter check; there is no shell, file write or generic command, and a new action needs a new
+  client release. A job is created only for a device that allows the action and pinned the server's
+  key, is signed over its canonical JSON, and carries a `seq` that increases per device. Nothing a
+  job carries may be valid beyond the device: no tokens, no shared passwords (which is why
+  `ctf_assign` is not an action).
+- **The fleet client executes nothing itself.** `FleetClient` verifies (pinned key, own device id,
+  higher `seq`, action allowed on the device) and calls a handler landing registered; everything is
+  off after enrolment. It never raises into landing, like `CTFClient`. Keep the signature check in
+  plain standard library (`verify_signature`), and never parse the decrypted padding.
+- **The signing key is never replaced silently.** Every enrolled device pinned it; an unreadable
+  key file stops jobs with an error instead.
 - **The API is a contract with deployed CybICS releases.** Changes under `/api/v1` may only *add*
   fields or endpoints. Renaming, removing or changing the meaning of anything needs `/api/v2`, served
   alongside v1. Update `docs/API.md` in the same change.

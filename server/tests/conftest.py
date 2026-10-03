@@ -3,6 +3,8 @@ import os
 import sys
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "client"))
@@ -43,12 +45,18 @@ FLAGS = {"physical_process": "CybICS(test_one)", "plc_programming": "CybICS(test
          "defense_firewall": "CybICS(test_three)"}
 
 
+# One fleet signing key for the whole run: generating RSA-3072 takes a while.
+SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=3072).private_bytes(
+    serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+
+
 @pytest.fixture
 def app(tmp_path):
     limiter.reset()
     app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path),
                       "DATABASE": str(tmp_path / "test.sqlite"),
-                      "SECRET_KEY": "test", "ADMIN_PASSWORD": ADMIN_PASSWORD})
+                      "SECRET_KEY": "test", "ADMIN_PASSWORD": ADMIN_PASSWORD,
+                      "FLEET_SIGNING_KEY": SIGNING_KEY})
     yield app
     limiter.reset()
 

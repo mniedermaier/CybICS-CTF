@@ -8,9 +8,11 @@ from flask import current_app, jsonify, request
 
 from ..api import bp, json_body, rate_limit
 from ..db import get_db, now
-from ..security import client_ip, limiter
+from ..security import audit, client_ip, limiter
+from . import jobs
 from . import logic as fleet
 from .logic import FleetError
+from .signing import get_signer
 
 log = logging.getLogger("cybics_mgmt")
 
@@ -60,7 +62,9 @@ def fleet_enroll():
         raise
     limiter.record(new_key)
     log.info("fleet enrol: %s device %s from %s", device["kind"], device_id[:8], client_ip())
+    # The device pins this key and runs only jobs signed with it.
     return jsonify({"device_id": device_id, "token": token, "device": _device_json(device),
+                    "signing_key": get_signer(current_app).public,
                     "heartbeat_interval": current_app.config["HEARTBEAT_INTERVAL"]}), 201
 
 
@@ -71,9 +75,26 @@ def fleet_heartbeat():
     data = json_body()
     db = get_db()
     fleet.record_device_heartbeat(db, device["id"], data.get("status"), client_ip())
-    return jsonify({"device": _device_json(fleet.get_device(db, device["id"])),
+    jobs.record_management(db, device["id"], data.get("management"))
+    for job in jobs.record_results(db, device["id"], data.get("job_results")):
+        audit("fleet_job_finished", actor=f"device {device['id'][:8]}", job=job["id"], job_action=job["action"],
+              state=job["state"], detail=job["detail"])
+    device = fleet.get_device(db, device["id"])
+    signer = get_signer(current_app)
+    return jsonify({"device": _device_json(device),
+                    "jobs": jobs.for_delivery(db, device, signer.fingerprint),
+                    "signing_key_fingerprint": signer.fingerprint,
                     "heartbeat_interval": current_app.config["HEARTBEAT_INTERVAL"],
                     "server_time": now()})
+
+
+@bp.post("/fleet/jobs/<job_id>/logs")
+def fleet_job_logs(job_id):
+    """The gzip log bundle of a collect_logs job, as the raw request body."""
+    device = authenticate()
+    rate_limit(f"fleet-logs:{device['id']}", "RATE_LIMIT_HEARTBEAT")
+    jobs.store_logs(get_db(), device["id"], job_id, request.get_data(cache=False))
+    return "", 204
 
 
 @bp.delete("/fleet/device")

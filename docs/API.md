@@ -256,9 +256,15 @@ that code's group. The proxy queues these requests together with `/enroll`.
   "device_id": "0b6f…",
   "token": "…",                       // returned only once; the server keeps a hash
   "device": {"id": "0b6f…", "label": "Board 7", "group": "Room 2"},
+  "signing_key": {"n": "c3a1…", "e": 65537, "fingerprint": "9f2c…"},
   "heartbeat_interval": 30
 }
 ```
+
+`signing_key` is the RSA key the server signs jobs with: modulus `n` in hex (at least 3072 bits)
+and exponent `e`. The client pins it and runs only jobs that verify against it. `fingerprint` is the
+SHA-256 of `"<e>:<n in hex>"` (lower-case hex); the organiser's device page and the landing page both
+show it.
 
 - Unknown code: `404 invalid_code`; disabled code: `403 code_disabled`; malformed device:
   `400 invalid_device`.
@@ -281,19 +287,71 @@ error note). A heartbeat without `status` keeps the previous one. `cybics_versio
     "mode": "full",
     "hostname": "cybics",
     "services": {"openplc": true, "fuxa": true, "hwio": false}
-  }
+  },
+  "management": {
+    "allowed": ["identify", "restart"],   // actions the user allowed on the device
+    "key_fingerprint": "9f2c…",          // of the key it pinned
+    "client": "1"
+  },
+  "job_results": [{"id": "5e1d…", "seq": 3, "state": "done", "detail": "restarted openplc"}]
 }
 ```
 
 `200`:
 
 ```json
-{"device": {"id": "0b6f…", "label": "Board 7", "group": "Room 2"}, "heartbeat_interval": 30,
- "server_time": 1790844330.0}
+{
+  "device": {"id": "0b6f…", "label": "Board 7", "group": "Room 2"},
+  "jobs": [{"id": "5e1d…", "device": "0b6f…", "seq": 3, "action": "restart",
+            "params": {"service": "openplc"}, "signature": "8d07…"}],
+  "signing_key_fingerprint": "9f2c…",
+  "heartbeat_interval": 30,
+  "server_time": 1790844330.0
+}
 ```
+
+- `management` replaces what the server knows about the device's management; without it, nothing
+  is allowed. Unknown actions are dropped.
+- `jobs` holds at most 5 open jobs, oldest first, and stays empty while the device's
+  `key_fingerprint` is not the server's. A job is repeated in every answer until its result
+  arrives; the client runs each `seq` once.
+- `job_results` finishes jobs: `state` is `done`, `failed` or `refused`, `detail` at most 500
+  characters. Any other state counts as `failed`. Results for jobs of other devices are ignored.
 
 A retired device gets `401 unauthorized`, like an unknown token. The organiser can bring it back,
 and the same token then works again.
+
+## Jobs
+
+A job is one action from a fixed list, for one device. There is no generic command.
+
+| `action` | `params` | The device |
+|---|---|---|
+| `identify` | `{"seconds": 5..600}` | shows a banner with its label on the landing page |
+| `message` | `{"text": "…"}` (at most 500 characters) | shows the text on the landing page |
+| `restart` | `{"service": "all" or a service name}` | restarts CybICS services (`utils/restart.py`) |
+| `reset_progress` | `{}` | clears the local CTF progress (`/ctf/reset`) |
+| `collect_logs` | `{}` | uploads a log bundle to `/fleet/jobs/<id>/logs` |
+
+A client runs a job only if all of these hold, and otherwise ignores it (bad signature, wrong
+device, old `seq`) or answers `refused` (action not allowed on the device):
+
+1. `signature` is a valid RSA PKCS#1 v1.5 SHA-256 signature, under the pinned key, over the
+   canonical JSON of `{"action", "device", "id", "params", "seq"}`: keys sorted, no spaces,
+   non-ASCII escaped (Python `json.dumps(..., sort_keys=True, separators=(",", ":"),
+   ensure_ascii=True)`).
+2. `device` is its own device id.
+3. `seq` is higher than every `seq` it accepted before. That stops replays without a clock.
+4. The user allowed `action` on the device.
+
+A job that was not delivered within 24 hours expires. The organiser can cancel an open job; a
+device that already received it may still run it, and its result is recorded.
+
+## 🔑 `POST /fleet/jobs/<id>/logs`
+
+The log bundle of a `collect_logs` job, as the raw body: gzip, at most 256 KB, `Content-Type:
+application/gzip`. `204`, or `404` (no such `collect_logs` job of this device), `400` (not gzip),
+`409` (already uploaded), `413` (too large). The server keeps the newest 5 bundles per device.
 
 ## 🔑 `DELETE /fleet/device`
 

@@ -112,7 +112,7 @@ scoreboard URL to pin one on a projector.
 | CybICS landing page: **Settings → Central CTF server** | ✅ In CybICS v1.2.4 |
 | CybICS Raspberry Pi: second Wi-Fi interface for the uplink | ✅ In CybICS v1.2.4 |
 | Fleet: device overview across events, groups, enrolment codes | ✅ Ready; CTF-only devices show what their CTF heartbeat reports |
-| Fleet: remote actions on devices that allow them | 🚧 Phase 2 of [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md), needs a CybICS release |
+| Fleet: remote actions on devices that allow them | ✅ Server and client ready; 🚧 the landing side is specified in [docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#fleet-management) |
 
 ---
 
@@ -189,8 +189,12 @@ an *outdated* marker against the newest in the fleet), service health, group and
   Nothing is deleted.
 - Two devices reporting the same board UID are flagged, never merged: the UID is broadcast in the
   board's SSID and can be copied.
-- Remote actions (restart a service, collect logs, ...) are phase 2 of
-  [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md) and need a CybICS release with fleet support.
+- **Remote actions** on devices that allow them: identify (a banner with the label), a message,
+  restart services, reset the local CTF progress, collect logs. Send them from a device's page, or
+  to several devices at once from the list. Each device decides which actions it allows, all off by
+  default, and runs only jobs signed with the key it pinned when it enrolled. Every job, its result
+  and every organiser action are on the *Fleet log*. This needs a CybICS release with fleet support
+  ([docs/CYBICS_INTEGRATION.md](docs/CYBICS_INTEGRATION.md#fleet-management)).
 
 ### Locked out?
 

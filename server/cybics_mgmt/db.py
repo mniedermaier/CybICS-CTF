@@ -263,6 +263,41 @@ MIGRATIONS = [
         FROM instances;
     UPDATE instances SET device_id = id;
     """,
+    # 11: fleet jobs (docs/MGMT_DESIGN.md, phase 2): what each device allows
+    # and the key it pinned, as it last reported them; signed, sequenced jobs;
+    # uploaded log bundles.
+    """
+    ALTER TABLE devices ADD COLUMN allowed_actions TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE devices ADD COLUMN key_fingerprint TEXT;
+    ALTER TABLE devices ADD COLUMN client_version TEXT;
+
+    CREATE TABLE jobs (
+        id          TEXT    PRIMARY KEY,
+        device_id   TEXT    NOT NULL REFERENCES devices(id),
+        seq         INTEGER NOT NULL,
+        action      TEXT    NOT NULL,
+        params_json TEXT    NOT NULL,
+        signature   TEXT    NOT NULL,
+        state       TEXT    NOT NULL DEFAULT 'pending'
+                    CHECK (state IN ('pending', 'delivered', 'done', 'failed', 'refused', 'cancelled', 'expired')),
+        detail      TEXT,
+        created_by  TEXT    NOT NULL,
+        created_at  REAL    NOT NULL,
+        delivered_at REAL,
+        finished_at REAL,
+        UNIQUE (device_id, seq)
+    );
+    CREATE INDEX jobs_device_state ON jobs(device_id, state);
+
+    CREATE TABLE job_logs (
+        id          INTEGER PRIMARY KEY,
+        job_id      TEXT    NOT NULL UNIQUE REFERENCES jobs(id),
+        device_id   TEXT    NOT NULL REFERENCES devices(id),
+        size        INTEGER NOT NULL,
+        content     BLOB    NOT NULL,
+        created_at  REAL    NOT NULL
+    );
+    """,
 ]
 
 

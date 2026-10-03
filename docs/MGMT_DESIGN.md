@@ -139,7 +139,6 @@ A job is one allow-listed action for one device:
 | `restart` | Restarts one CybICS service or the whole compose project (`utils/restart.py`). | service or `all` |
 | `reset_progress` | Clears the local CTF progress (`/ctf/reset`). | none |
 | `collect_logs` | Uploads a log bundle (container logs, image tags), at most 256 KB compressed. | none |
-| `ctf_assign` | Joins or leaves a CTF event with a server-issued v1 instance token. | event, token or `leave` |
 
 Rules:
 
@@ -215,6 +214,12 @@ Status: implemented. The enrolment answer gains the signing key in phase 2.
 - No CybICS change is needed for the legacy view.
 
 ## Phase 2: commands
+
+Status: implemented on the server and in the client; the landing side is specified in
+[CYBICS_INTEGRATION.md](CYBICS_INTEGRATION.md#fleet-management) and still to be done in CybICS.
+`ctf_assign` is left out: its job would carry an instance token, and jobs are stored as they are
+signed, so the token would sit in the database in plaintext. It needs a different design, for
+example a one-time claim code instead of the token.
 
 - Migration: `jobs` and `job_logs`.
 - Signing key, job creation (single and bulk), delivery in the heartbeat answer, results,

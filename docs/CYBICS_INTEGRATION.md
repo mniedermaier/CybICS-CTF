@@ -139,6 +139,52 @@ variable for image tags) or bake it in at image build time.
 
 It opens no listening port and runs no commands.
 
+### Fleet management
+
+CybICS-mgmt can also manage the installation (`docs/MGMT_DESIGN.md`). The same client file has a
+`FleetClient` for that. Like the CTF client it is off until the user enrols, and it **executes
+nothing by itself**: landing registers one handler per action, and only for the actions landing
+wants to offer.
+
+```python
+from modules.central_ctf import FleetClient
+
+fleet_client = FleetClient(
+    state_path="data/central_fleet.json",
+    device_info=central.instance_info,                 # kind, device_uid, hostname, version, mode
+    status=central.collect_fleet_status,               # telemetry, see below
+    handlers={
+        "identify": lambda p: ui.banner(f"This is {central.label()}", seconds=p["seconds"]),
+        "message": lambda p: ui.banner(p["text"], seconds=300),
+        "restart": lambda p: restart.restart_project() if p["service"] == "all"
+                             else restart.restart_service(p["service"]),
+        "reset_progress": lambda p: ctf_manager.reset_progress(),
+        "collect_logs": lambda p: logs.bundle_text(),  # the text of /api/settings/logs/download
+    })
+fleet_client.start()
+```
+
+Settings page, next to the central CTF server:
+
+- **Join fleet**: server address, enrolment code (an event's join code works too), optional label.
+  Calls `fleet_client.enroll(url, code, label)`.
+- **Allowed actions**: one switch per action, all off after enrolment;
+  `fleet_client.set_allowed([...])`. Switching everything off is the kill switch; leaving the fleet
+  (`fleet_client.leave()`) ends it entirely.
+- Show `snapshot()["key_fingerprint"]` (the organiser's device page shows the same value), the
+  queue, the job history and `last_error` (`bad_signature` means somebody sent a forged job).
+- `restart` with `all` takes landing down too. The client records the job as running before it
+  starts, and reports it as done after landing comes back.
+
+Telemetry for `collect_fleet_status()`, all optional: `cybics_version`, `mode`, `hostname`,
+`services` (name → running), `host` (CPU %, memory, disk, uptime, CPU temperature from
+`/sys/class/thermal/thermal_zone0/temp`), and on a board `board` (revision, firmware version, STM32
+link state, uplink SSID, address and signal). The server stores at most 16 KB of it.
+
+What fleet management adds to the blast radius: a second outbound connection to the same server,
+a second state file, and the actions the user switched on, each with fixed parameters checked by the
+server and the handler. Nothing else, and nothing at all while no action is allowed.
+
 ## 2. Physical device: second Wi-Fi interface
 
 The onboard `wlan0` stays as it is: an AP for the training network (`cybics-<uid>`, `10.0.0.1/24`),
