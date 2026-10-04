@@ -11,6 +11,7 @@ from flask import current_app, g, jsonify, request
 
 from ..api import bp, json_body, rate_limit
 from ..db import get_db, now
+from ..fleet import logic as fleet
 from ..security import HashingBusy, client_ip, limiter
 from . import logic as ctf
 from .logic import CTFError
@@ -87,9 +88,17 @@ def enroll():
         if creating and limiter.exceeded(newteam_key, limit, window):
             raise CTFError("rate_limited", "Too many new teams from this address. Join an existing team "
                                            "or ask the organiser.", 429)
+        # A fleet-aware client sends its device token, so the instance joins
+        # its device instead of getting a legacy device of its own.
+        device_id = None
+        if data.get("device_token") is not None:
+            device = fleet.authenticate_device(db, data.get("device_token"))
+            if device is None:
+                raise CTFError("invalid_device_token", "Unknown or retired device token.", 403)
+            device_id = device["id"]
         instance_id, token, event, team, uid_teams = ctf.enroll(
             db, data.get("join_code"), data.get("team_name"), data.get("team_password"),
-            data.get("instance"), client_ip())
+            data.get("instance"), client_ip(), device_id=device_id)
     except HashingBusy:
         raise CTFError("busy", "The server is busy with other enrolments. Try again in a few seconds.",
                        503) from None

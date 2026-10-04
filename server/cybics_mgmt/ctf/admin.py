@@ -2,10 +2,9 @@
 The CTF pages of the organiser UI: events, challenges, teams, instances,
 solves, the audit trail and exports.
 """
-import json
-
 from flask import abort, current_app, flash, redirect, render_template, request, url_for
 
+from .. import device_input
 from ..admin import bp, csv_response, lockouts
 from ..db import get_db, now
 from ..security import admin_required, audit
@@ -63,7 +62,9 @@ def events():
                     WHERE event_id = :e AND {ctf.ACTIVE}) AS challenges
         """, {"e": event["id"]}).fetchone()
         rows.append((event, counts))
-    logins = db.execute("""SELECT * FROM admin_log WHERE event_id IS NULL
+    # Fleet actions have no event either; they are on the fleet's own log page.
+    logins = db.execute("""SELECT * FROM admin_log
+                           WHERE event_id IS NULL AND action NOT LIKE 'fleet\\_%' ESCAPE '\\'
                            ORDER BY created_at DESC LIMIT 20""").fetchall()
     return render_template("admin/events.html", rows=rows, logins=logins, lockouts=lockouts())
 
@@ -309,28 +310,14 @@ def instances(event_id):
     online_since = now() - current_app.config["ONLINE_WINDOW"]
     instances = []
     for row in rows:
-        try:
-            status = json.loads(row["status_json"] or "{}")
-        except (ValueError, RecursionError):
-            status = {}
-        if not isinstance(status, dict):
-            status = {}
+        status = device_input.parse_status(row["status_json"])
         services = status.get("services") if isinstance(status.get("services"), dict) else {}
         instances.append({**dict(row), "online": (row["last_seen"] or 0) >= online_since,
-                          "status_pretty": _pretty(status),
+                          "status_pretty": device_input.pretty_status(status),
                           "services_up": sum(1 for v in services.values() if v),
                           "services_total": len(services), "status": status})
     return render_template("admin/instances.html", event=event, instances=instances,
                            show_all=show_all, revoked=revoked)
-
-
-def _pretty(status):
-    # Stored statuses are depth-checked, but rows from before that check may
-    # not be; a broken status must never take the page down.
-    try:
-        return json.dumps(status, indent=2, sort_keys=True)[:4000]
-    except (RecursionError, TypeError, ValueError):
-        return "(status cannot be displayed)"
 
 
 @bp.post("/events/<int:event_id>/instances/<instance_id>/revoke")

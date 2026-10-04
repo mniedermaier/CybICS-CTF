@@ -1,9 +1,15 @@
 {% extends "base.html" %}
 {% block scripts %}<script src="{{ url_for('static', filename='admin.js') }}"></script>{% endblock %}
 {% block nav %}
-  <a href="{{ url_for('admin.events') }}">Events</a>
-  {% if event %}
   {% set ep = request.endpoint %}
+  <a class="{{ 'active' if ep == 'admin.events' }}" href="{{ url_for('admin.events') }}">Events</a>
+  <a class="{{ 'active' if ep and ep.startswith('admin.fleet') }}" href="{{ url_for('admin.fleet_devices') }}">Fleet</a>
+  {% if fleet_page %}
+  <a class="{{ 'active' if ep in ('admin.fleet_devices', 'admin.fleet_device') }}" href="{{ url_for('admin.fleet_devices') }}">Devices</a>
+  <a class="{{ 'active' if ep == 'admin.fleet_setup' }}" href="{{ url_for('admin.fleet_setup') }}">Groups &amp; codes</a>
+  <a class="{{ 'active' if ep == 'admin.fleet_log' }}" href="{{ url_for('admin.fleet_log') }}">Fleet log</a>
+  {% endif %}
+  {% if event %}
   <a class="{{ 'active' if ep == 'admin.event' }}" href="{{ url_for('admin.event', event_id=event.id) }}">{{ event.name }}</a>
   <a class="{{ 'active' if ep == 'admin.challenges' }}" href="{{ url_for('admin.challenges', event_id=event.id) }}">Challenges</a>
   <a class="{{ 'active' if ep == 'admin.teams' }}" href="{{ url_for('admin.teams', event_id=event.id) }}">Teams</a>

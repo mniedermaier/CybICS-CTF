@@ -1,0 +1,58 @@
+{% extends "admin/layout.html" %}
+{% set fleet_page = true %}
+{% block title %}Fleet{% endblock %}
+{% block body_class %}autorefresh{% endblock %}
+{% block content %}
+<h1>Fleet</h1>
+<p class="muted">Every CybICS installation this server knows, across events. Refreshes every 30 seconds. A device is
+  online if it checked in within the last {{ config.ONLINE_WINDOW }} seconds. What a device reports about itself is
+  display data: participants can change it.</p>
+<div class="panel stats">
+  <div class="stat"><div class="value">{{ counts.online }}</div><div class="label">online</div></div>
+  <div class="stat"><div class="value">{{ counts.offline }}</div><div class="label">offline</div></div>
+  {% if show_all %}<div class="stat"><div class="value">{{ counts.gone }}</div><div class="label">retired or gone</div></div>{% endif %}
+  <div class="stat"><div class="value">{{ newest or '-' }}</div><div class="label">newest CybICS</div></div>
+</div>
+<div class="panel">
+  <form method="get" action="{{ url_for('admin.fleet_devices') }}" class="row">
+    <select name="group" aria-label="Group">
+      <option value="">All groups</option>
+      {% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if group_id == g.id }}>{{ g.name }}</option>{% endfor %}
+    </select>
+    <select name="kind" aria-label="Kind">
+      <option value="">Virtual and physical</option>
+      <option value="virtual" {{ 'selected' if kind == 'virtual' }}>Virtual</option>
+      <option value="physical" {{ 'selected' if kind == 'physical' }}>Physical</option>
+    </select>
+    <label class="check"><input type="checkbox" name="all" value="1" {{ 'checked' if show_all }}> Show retired and gone</label>
+    <button class="secondary" type="submit">Filter</button>
+  </form>
+  <table>
+    <thead><tr><th>Status</th><th>Device</th><th>Kind</th><th>Group</th><th>CybICS</th><th>Services</th>
+               <th>CTF</th><th>Address</th><th>Last seen</th></tr></thead>
+    <tbody>
+    {% for d in devices %}
+      <tr class="{{ 'muted' if d.state == 'gone' }}">
+        <td>{% if d.state == 'online' %}<span class="badge ok">online</span>
+            {% elif d.state == 'offline' %}<span class="badge warn">offline</span>
+            {% else %}<span class="badge">{{ 'retired' if d.retired else 'gone' }}</span>{% endif %}</td>
+        <td><a href="{{ url_for('admin.fleet_device', device_id=d.id) }}">{{ d.label or (('cybics-' ~ d.device_uid) if d.device_uid else (d.hostname or d.id[:8])) }}</a>
+            {% if d.legacy %}<span class="badge" title="Known through a CTF enrolment of a CybICS release without fleet support: shown, no actions.">CTF only</span>{% endif %}
+            {% if d.uid_devices > 0 %}<span class="badge bad" title="Other devices in service report the same board UID. UIDs are broadcast in the SSID and can be copied; this is a hint, never acted on.">UID on {{ d.uid_devices + 1 }} devices</span>{% endif %}
+            <div class="muted mono" title="{{ d.id }}">{{ d.id[:8] }}{% if d.label and d.device_uid %} &middot; cybics-{{ d.device_uid }}{% endif %}</div></td>
+        <td>{{ d.kind }}</td>
+        <td>{{ d.group_name or '-' }}</td>
+        <td class="mono">{{ d.cybics_version or '-' }}{% if d.outdated %} <span class="badge warn" title="Older than the newest version in the fleet">outdated</span>{% endif %}
+            {% if d.mode %}<div class="muted">{{ d.mode }}</div>{% endif %}</td>
+        <td>{% if d.services_total %}{{ d.services_up }}/{{ d.services_total }} up{% else %}<span class="muted">-</span>{% endif %}</td>
+        <td>{{ d.ctf or '-' }}</td>
+        <td class="mono">{{ d.remote_addr or '-' }}</td>
+        <td class="muted">{{ d.last_seen|ago }}</td></tr>
+    {% else %}
+      <tr><td colspan="9" class="muted">No devices yet. CybICS installations appear here when they enrol in an
+        event, or in the fleet with an <a href="{{ url_for('admin.fleet_setup') }}">enrolment code</a>.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

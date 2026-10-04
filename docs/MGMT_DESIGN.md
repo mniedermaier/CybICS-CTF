@@ -185,6 +185,8 @@ Rules:
 
 ## Phase 0: restructure and rename
 
+Status: implemented.
+
 The rename must not break deployed CybICS releases or existing installations.
 
 | Item | Today | After | Compatibility |
@@ -202,6 +204,8 @@ The rename must not break deployed CybICS releases or existing installations.
 Docs, CLAUDE.md, CI and the README badges move with it.
 
 ## Phase 1: read-only fleet
+
+Status: implemented. The enrolment answer gains the signing key in phase 2.
 
 - Migration: `devices`, `device_groups`, `enrol_codes`, `instances.device_id`; a device for every
   existing instance (`legacy`).

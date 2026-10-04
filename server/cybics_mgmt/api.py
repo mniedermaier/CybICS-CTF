@@ -16,7 +16,7 @@ from .security import limiter
 
 API_VERSION = 1
 # What this server offers, for clients that can use more than the CTF.
-FEATURES = ("ctf",)
+FEATURES = ("ctf", "fleet")
 
 bp = Blueprint("api", __name__, url_prefix="/api/v1")
 

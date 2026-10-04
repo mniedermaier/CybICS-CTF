@@ -1,0 +1,81 @@
+{% extends "admin/layout.html" %}
+{% set fleet_page = true %}
+{% set name = device.label or (('cybics-' ~ device.device_uid) if device.device_uid else (device.hostname or device.id[:8])) %}
+{% block title %}{{ name }} &middot; Fleet{% endblock %}
+{% block content %}
+<h1>{{ name }}
+  {% if device.retired %}<span class="badge">retired</span>
+  {% elif online %}<span class="badge ok">online</span>{% else %}<span class="badge warn">offline</span>{% endif %}
+  {% if device.legacy %}<span class="badge">CTF only</span>{% endif %}</h1>
+{% if device.legacy %}
+<div class="flash">This device is known through a CTF enrolment of a CybICS release without fleet support. It is shown with
+  what its CTF heartbeat reports; actions need a CybICS release with fleet support.</div>
+{% endif %}
+<div class="grid">
+  <div class="panel">
+    <h2>Device</h2>
+    <table>
+      <tbody>
+        <tr><th>Id</th><td class="mono">{{ device.id }}</td></tr>
+        <tr><th>Kind</th><td>{{ device.kind }}</td></tr>
+        {% if device.device_uid %}<tr><th>Board UID</th><td class="mono">{{ device.device_uid }} <span class="muted">(SSID cybics-{{ device.device_uid }})</span></td></tr>{% endif %}
+        <tr><th>Hostname</th><td class="mono">{{ device.hostname or '-' }}</td></tr>
+        <tr><th>CybICS</th><td class="mono">{{ device.cybics_version or '-' }}{% if device.mode %} ({{ device.mode }}){% endif %}</td></tr>
+        <tr><th>Address</th><td class="mono">{{ device.remote_addr or '-' }}</td></tr>
+        <tr><th>Enrolled</th><td>{{ device.enrolled_at|time }}</td></tr>
+        <tr><th>Last seen</th><td>{{ device.last_seen|ago }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="panel">
+    <h2>Label, group and notes</h2>
+    <form method="post" action="{{ url_for('admin.fleet_device_update', device_id=device.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <p><input type="text" name="label" value="{{ device.label }}" maxlength="40" placeholder="Label, e.g. the sticker: Board 7" aria-label="Label" size="32"></p>
+      <p><select name="group" aria-label="Group">
+        <option value="">No group</option>
+        {% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if device.group_id == g.id }}>{{ g.name }}</option>{% endfor %}
+      </select></p>
+      <p><textarea name="notes" rows="3" cols="40" maxlength="500" placeholder="Notes" aria-label="Notes">{{ device.notes }}</textarea></p>
+      <button type="submit">Save</button>
+    </form>
+  </div>
+</div>
+<div class="panel">
+  <h2>Last status</h2>
+  {% if status %}
+    {% set services = status.services if status.services is mapping else {} %}
+    {% if services %}
+    <p>{% for name, up in services|dictsort %}<span class="badge {{ 'ok' if up else 'bad' }}">{{ name }}</span> {% endfor %}</p>
+    {% endif %}
+    <details><summary class="muted">Everything the device reported</summary><pre class="status">{{ status_pretty }}</pre></details>
+  {% else %}<p class="muted">Nothing reported yet.</p>{% endif %}
+</div>
+<div class="panel">
+  <h2>CTF participation</h2>
+  <table>
+    <thead><tr><th>Event</th><th>Team</th><th>Enrolled</th><th>Last seen</th><th></th></tr></thead>
+    <tbody>
+    {% for i in instances %}
+      <tr class="{{ 'muted' if i.revoked }}"><td><a href="{{ url_for('admin.event', event_id=i.event_id) }}">{{ i.event }}</a></td>
+          <td>{{ i.team }}</td><td class="muted">{{ i.enrolled_at|time }}</td><td class="muted">{{ i.last_seen|ago }}</td>
+          <td>{% if i.revoked %}<span class="badge">revoked</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">Not enrolled in any event.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="panel">
+  <h2>Retire</h2>
+  {% if device.retired %}
+  <p class="muted">Retired{% if device.retired_reason == 'left' %} by the device itself (management switched off on the landing page){% endif %}.
+    Bringing it back makes its token work again.</p>
+  <form method="post" action="{{ url_for('admin.fleet_device_action', device_id=device.id, action='restore') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="secondary" type="submit">Bring back</button></form>
+  {% else %}
+  <p class="muted">A retired device leaves the list and its fleet token stops working. Its history stays; nothing is deleted.
+    CTF participation is not affected: revoke instances on the event's Instances page.</p>
+  <form method="post" action="{{ url_for('admin.fleet_device_action', device_id=device.id, action='retire') }}" data-confirm="Retire this device?">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="danger" type="submit">Retire</button></form>
+  {% endif %}
+</div>
+{% endblock %}

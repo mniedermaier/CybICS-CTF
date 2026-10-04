@@ -211,6 +211,58 @@ MIGRATIONS = [
     ALTER TABLE events ADD COLUMN first_blood_bonus INTEGER NOT NULL DEFAULT 0
         CHECK (first_blood_bonus BETWEEN 0 AND 100);
     """,
+    # 10: the fleet (docs/MGMT_DESIGN.md, phase 1). A device is one CybICS
+    # installation and outlives events; every existing instance gets a legacy
+    # device with the same id.
+    """
+    CREATE TABLE device_groups (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        created_at  REAL    NOT NULL
+    );
+
+    CREATE TABLE devices (
+        id              TEXT    PRIMARY KEY,
+        token_hash      TEXT    UNIQUE,
+        label           TEXT    NOT NULL DEFAULT '',
+        group_id        INTEGER REFERENCES device_groups(id) ON DELETE SET NULL,
+        kind            TEXT    NOT NULL CHECK (kind IN ('virtual', 'physical')),
+        device_uid      TEXT,
+        hostname        TEXT,
+        cybics_version  TEXT,
+        mode            TEXT,
+        remote_addr     TEXT,
+        status_json     TEXT,
+        legacy          INTEGER NOT NULL DEFAULT 0,
+        retired         INTEGER NOT NULL DEFAULT 0,
+        retired_reason  TEXT,
+        notes           TEXT    NOT NULL DEFAULT '',
+        enrolled_at     REAL    NOT NULL,
+        last_seen       REAL
+    );
+    CREATE INDEX devices_uid ON devices(device_uid);
+    CREATE INDEX devices_group ON devices(group_id);
+
+    CREATE TABLE enrol_codes (
+        id          INTEGER PRIMARY KEY,
+        code        TEXT    NOT NULL UNIQUE,
+        label       TEXT    NOT NULL DEFAULT '',
+        group_id    INTEGER REFERENCES device_groups(id) ON DELETE SET NULL,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        uses        INTEGER NOT NULL DEFAULT 0,
+        created_at  REAL    NOT NULL
+    );
+
+    ALTER TABLE instances ADD COLUMN device_id TEXT REFERENCES devices(id) ON DELETE SET NULL;
+    CREATE INDEX instances_device ON instances(device_id);
+
+    INSERT INTO devices (id, kind, device_uid, hostname, cybics_version, mode, remote_addr, status_json,
+                         legacy, enrolled_at, last_seen)
+        SELECT id, kind, device_uid, hostname, cybics_version, mode, remote_addr, status_json,
+               1, enrolled_at, last_seen
+        FROM instances;
+    UPDATE instances SET device_id = id;
+    """,
 ]
 
 
