@@ -23,6 +23,6 @@ jobs:
     container: python:3.9-alpine
     steps:
       - uses: actions/checkout@v7
-      - run: pip install flask==3.1.3 werkzeug==3.1.9 pytest==8.4.2
-      - run: python -m pytest -p no:cacheprovider tests/test_client.py
+      - run: pip install flask==3.1.3 werkzeug==3.1.9 cryptography==50.0.2 pytest==8.4.2
+      - run: python -m pytest -p no:cacheprovider tests/test_client.py tests/test_fleet_client.py
         working-directory: server

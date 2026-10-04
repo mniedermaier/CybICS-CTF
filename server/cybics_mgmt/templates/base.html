@@ -25,11 +25,12 @@
       <svg class="icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
     </button>
     {% if is_admin() %}
+    <a href="{{ url_for('admin.password') }}">Passwords</a>
     <form class="inline" method="post" action="{{ url_for('admin.logout') }}">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <button class="secondary" type="submit">Log out</button>
     </form>
-    {% elif request.endpoint not in ('admin.login', 'public.scoreboard') %}
+    {% elif request.endpoint not in ('admin.login', 'admin.setup', 'public.scoreboard') %}
     <a href="{{ url_for('admin.login') }}">Organiser login</a>
     {% endif %}
   </div>
@@ -38,6 +39,7 @@
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}<div class="flash {{ category }}" role="status">{{ message }}</div>{% endfor %}
   {% endwith %}
+  {% block warnings %}{% endblock %}
   {% block content %}{% endblock %}
 </main>
 <footer>{% if server_name != "CybICS-mgmt" %}{{ server_name }} &middot; {% endif %}CybICS-mgmt {{ app_version }} &middot; <a href="https://github.com/mniedermaier/CybICS">CybICS on GitHub</a></footer>

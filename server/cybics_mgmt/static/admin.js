@@ -10,11 +10,13 @@
     if (question && !window.confirm(question)) event.preventDefault();
   });
 
-  // Pages marked "autorefresh" (the instance list) reload every 30 s, but
-  // never while the organiser has a status open or is typing.
+  // Pages marked "autorefresh" (the instance and device lists) reload every
+  // 30 s, but never while the organiser has a status open, is typing, or has
+  // selected devices for a bulk action.
   if (document.body.classList.contains("autorefresh")) {
     setInterval(function () {
       var busy = document.querySelector("details[open]") ||
+                 document.querySelector("input[type=checkbox][name=device_id]:checked") ||
                  (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
       if (!busy) window.location.reload();
     }, 30000);

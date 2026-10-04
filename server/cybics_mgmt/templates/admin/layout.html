@@ -19,3 +19,9 @@
   {% if event.scoreboard_public %}<a href="{{ url_for('public.scoreboard', slug=event.slug) }}" target="_blank" rel="noopener">Scoreboard &#8599;</a>{% endif %}
   {% endif %}
 {% endblock %}
+{% block warnings %}
+{% if pi_default_password and request.endpoint != 'admin.password' %}
+<div class="flash error">The Raspberry Pi still has the default login <span class="mono">pi</span> / <span class="mono">raspberry</span>.
+  <a href="{{ url_for('admin.password') }}">Set a new password</a>.</div>
+{% endif %}
+{% endblock %}

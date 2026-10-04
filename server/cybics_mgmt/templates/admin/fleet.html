@@ -27,17 +27,20 @@
     <label class="check"><input type="checkbox" name="all" value="1" {{ 'checked' if show_all }}> Show retired and gone</label>
     <button class="secondary" type="submit">Filter</button>
   </form>
+</div>
+<form method="post" action="{{ url_for('admin.fleet_jobs_bulk', group=group_id, kind=kind, all=1 if show_all else None) }}" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
   <table>
-    <thead><tr><th>Status</th><th>Device</th><th>Kind</th><th>Group</th><th>CybICS</th><th>Services</th>
-               <th>CTF</th><th>Address</th><th>Last seen</th></tr></thead>
+    <thead><tr><th><span class="sr-only">Select</span></th><th>Status</th><th>Device</th><th>Kind</th><th>Group</th><th>CybICS</th><th>Services</th>
+               <th>CTF</th><th>Actions</th><th>Address</th><th>Last seen</th></tr></thead>
     <tbody>
     {% for d in devices %}
       <tr class="{{ 'muted' if d.state == 'gone' }}">
+        <td>{% if d.allowed and not d.retired %}<input type="checkbox" name="device_id" value="{{ d.id }}" aria-label="Select {{ d.label or d.id[:8] }}">{% endif %}</td>
         <td>{% if d.state == 'online' %}<span class="badge ok">online</span>
             {% elif d.state == 'offline' %}<span class="badge warn">offline</span>
             {% else %}<span class="badge">{{ 'retired' if d.retired else 'gone' }}</span>{% endif %}</td>
         <td><a href="{{ url_for('admin.fleet_device', device_id=d.id) }}">{{ d.label or (('cybics-' ~ d.device_uid) if d.device_uid else (d.hostname or d.id[:8])) }}</a>
-            {% if d.legacy %}<span class="badge" title="Known through a CTF enrolment of a CybICS release without fleet support: shown, no actions.">CTF only</span>{% endif %}
             {% if d.uid_devices > 0 %}<span class="badge bad" title="Other devices in service report the same board UID. UIDs are broadcast in the SSID and can be copied; this is a hint, never acted on.">UID on {{ d.uid_devices + 1 }} devices</span>{% endif %}
             <div class="muted mono" title="{{ d.id }}">{{ d.id[:8] }}{% if d.label and d.device_uid %} &middot; cybics-{{ d.device_uid }}{% endif %}</div></td>
         <td>{{ d.kind }}</td>
@@ -46,13 +49,25 @@
             {% if d.mode %}<div class="muted">{{ d.mode }}</div>{% endif %}</td>
         <td>{% if d.services_total %}{{ d.services_up }}/{{ d.services_total }} up{% else %}<span class="muted">-</span>{% endif %}</td>
         <td>{{ d.ctf or '-' }}</td>
+        <td>{% if d.allowed %}<span title="{{ d.allowed|join(', ') }}">{{ d.allowed|length }} allowed</span>{% else %}<span class="muted">off</span>{% endif %}</td>
         <td class="mono">{{ d.remote_addr or '-' }}</td>
         <td class="muted">{{ d.last_seen|ago }}</td></tr>
     {% else %}
-      <tr><td colspan="9" class="muted">No devices yet. CybICS installations appear here when they enrol in an
-        event, or in the fleet with an <a href="{{ url_for('admin.fleet_setup') }}">enrolment code</a>.</td></tr>
+      <tr><td colspan="11" class="muted">No devices yet. CybICS installations appear here when they enrol with an
+        <a href="{{ url_for('admin.fleet_setup') }}">enrolment code</a> or an event's join code.</td></tr>
     {% endfor %}
     </tbody>
   </table>
-</div>
+  <h2>Send to the selected devices</h2>
+  <p class="muted">Devices that do not allow the action are skipped. Only devices that allow at least one action can be selected.</p>
+  <div class="row">
+    <select name="action" aria-label="Action">
+      {% for key, (label, _) in actions.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+    </select>
+    <input type="number" name="seconds" value="60" min="5" max="600" aria-label="Seconds (identify)" title="Seconds (identify)">
+    <input type="text" name="text" maxlength="500" placeholder="Message text (message)" aria-label="Message text">
+    <input type="text" name="service" value="all" maxlength="63" size="10" aria-label="Service (restart)" title="Service (restart)">
+    <button type="submit" data-confirm="Send this action to the selected devices?">Send</button>
+  </div>
+</form>
 {% endblock %}

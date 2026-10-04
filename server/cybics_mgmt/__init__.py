@@ -1,11 +1,11 @@
 """
 CybICS-mgmt: the optional central server for CybICS.
 
-An optional companion to CybICS (https://github.com/mniedermaier/CybICS). It
-runs CTF events: virtual and physical CybICS instances that the user enrols
-from the landing page report their team, status and solves here, and the
-organiser runs a shared scoreboard. A CybICS instance never needs this server
-to work.
+An optional companion to CybICS (https://github.com/mniedermaier/CybICS).
+CybICS installations, virtual and physical, enrol as devices from their
+landing page. The organiser sees and manages them in the fleet, and runs CTF
+events in which devices report their team's solves to a shared scoreboard. A
+CybICS installation never needs this server to work.
 """
 import logging
 import os
@@ -22,27 +22,15 @@ __version__ = "0.1.0"
 log = logging.getLogger("cybics_mgmt")
 
 ENV_PREFIX = "MGMT_"
-# Settings were called CTF_* before the rename to CybICS-mgmt; still honoured.
-LEGACY_ENV_PREFIX = "CTF_"
-_warned_legacy = set()
 
 
 def env(name, default=None):
     """
-    The setting MGMT_<name>, else the pre-rename CTF_<name> (logged once as
-    deprecated), else `default`. Blank values count as unset, as they do in
-    docker compose files that pass every variable through.
+    The setting MGMT_<name>, else `default`. Blank values count as unset, as
+    they do in docker compose files that pass every variable through.
     """
     value = os.environ.get(ENV_PREFIX + name)
-    if value is not None and value.strip():
-        return value
-    value = os.environ.get(LEGACY_ENV_PREFIX + name)
-    if value is not None and value.strip():
-        if name not in _warned_legacy:
-            _warned_legacy.add(name)
-            log.warning("%s%s is deprecated; rename it to %s%s", LEGACY_ENV_PREFIX, name, ENV_PREFIX, name)
-        return value
-    return default
+    return value if value is not None and value.strip() else default
 
 
 def _env_int(name, default):
@@ -102,6 +90,26 @@ def _configure_logging():
         log.propagate = False
 
 
+def _ensure_default_code(app):
+    from .fleet import logic as fleet
+    conn = db.connect(app.config["DATABASE"])
+    try:
+        if fleet.ensure_code(conn, app.config["DEFAULT_ENROL_CODE"], "Default for CybICS boards"):
+            log.warning("created the default enrolment code %s", app.config["DEFAULT_ENROL_CODE"].upper())
+    finally:
+        conn.close()
+
+
+def _report_admin_setup(app):
+    conn = db.connect(app.config["DATABASE"])
+    try:
+        unset = conn.execute("SELECT 1 FROM admin_credentials WHERE id = 1").fetchone() is None
+    finally:
+        conn.close()
+    if unset:
+        log.warning("no admin password yet: the first visit to /admin sets it")
+
+
 def create_app(test_config=None):
     _configure_logging()
     app = Flask(__name__)
@@ -119,7 +127,7 @@ def create_app(test_config=None):
         # (hits, seconds) per key. All per-address limits count failures only;
         # see "Shared addresses" in docs/ARCHITECTURE.md.
         # Wrong team passwords per address per minute; 0 switches it off.
-        RATE_LIMIT_ENROLL=(_env_int("RATE_ENROLL", 60), 60),
+        RATE_LIMIT_JOIN=(_env_int("RATE_JOIN", 60), 60),
         RATE_LIMIT_HEARTBEAT=(_env_int("RATE_HEARTBEAT", 30), 60),
         RATE_LIMIT_SOLVE=(_env_int("RATE_SOLVE", 30), 60),
         RATE_LIMIT_LOGIN=(_env_int("RATE_LOGIN", 10), 300),
@@ -130,6 +138,12 @@ def create_app(test_config=None):
         # devices one address may enrol per 10 minutes.
         RATE_LIMIT_ENROL_CODE=(_env_int("RATE_ENROL_CODE", 60), 60),
         RATE_LIMIT_NEW_DEVICES=(_env_int("RATE_NEW_DEVICES", 100), 600),
+        # An enrolment code created at start if missing: the code CybICS
+        # boards use to enrol on their own on the default network.
+        DEFAULT_ENROL_CODE=(env("DEFAULT_ENROL_CODE") or "").strip(),
+        # The Raspberry Pi image mounts a directory here for requests to the
+        # host (setting the pi account's password); see host.py.
+        HOST_DIR=(env("HOST_DIR") or "").strip(),
         # Requests with an unknown or revoked token, per address. Valid tokens
         # are never limited by this.
         RATE_LIMIT_BAD_TOKEN=(60, 60),
@@ -157,11 +171,8 @@ def create_app(test_config=None):
                                    "(set MGMT_ALLOW_WEAK_ADMIN_PASSWORD=1 for a local test setup).")
             log.warning("MGMT_ALLOW_WEAK_ADMIN_PASSWORD=1: the admin password is shorter than 8 characters. "
                         "Never run an event like this.")
-        if not password:
-            password, created = _persistent_secret(app.config["DATA_DIR"], "admin_password")
-            if created:
-                log.warning("MGMT_ADMIN_PASSWORD not set; generated an admin password in %s/admin_password",
-                            app.config["DATA_DIR"])
+        # Empty: the first visit to /admin sets the password in the browser
+        # (security.admin_setup_needed); it is then stored as a hash.
         app.config["ADMIN_PASSWORD"] = password
 
     # Behind a reverse proxy (Caddy/nginx/Traefik), take the client address
@@ -182,6 +193,10 @@ def create_app(test_config=None):
     from .fleet import admin as _fleet_admin  # noqa: F401
     from .fleet import api as _fleet_api  # noqa: F401
     db.init_app(app)
+    if app.config.get("DEFAULT_ENROL_CODE"):
+        _ensure_default_code(app)
+    if not app.config["ADMIN_PASSWORD"]:
+        _report_admin_setup(app)
     app.register_blueprint(api.bp)
     app.register_blueprint(admin.bp)
     app.register_blueprint(public.bp)

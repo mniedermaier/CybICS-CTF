@@ -1,0 +1,25 @@
+# pi-gen configuration of the CybICS-mgmt image (image/build.sh copies it into
+# pi-gen). One 64-bit image for the Raspberry Pi 3, 4, 5 and Zero 2 W.
+
+IMG_NAME="CybICS-mgmt"
+RELEASE="trixie"
+TARGET_HOSTNAME="cybics-mgmt"
+FIRST_USER_NAME="pi"
+FIRST_USER_PASS="raspberry"
+# Keep the pi account instead of deactivating it until a first-boot wizard
+# renames it: this is an appliance image with published credentials, like the
+# CybICS image, and without a usable account nothing can be administered.
+# The README and the release notes say to change the password.
+DISABLE_FIRST_BOOT_USER_RENAME=1
+ENABLE_SSH="1"
+LOCALE_DEFAULT="en_US.UTF-8"
+KEYBOARD_KEYMAP="us"
+KEYBOARD_LAYOUT="English (US)"
+TIMEZONE_DEFAULT="UTC"
+# Raspberry Pi OS keeps Wi-Fi blocked until a country is set. cybics-mgmt.txt
+# on the boot partition changes it.
+WPA_COUNTRY="US"
+DEPLOY_COMPRESSION="xz"
+
+# Lite (stage0-2) plus our stage; no desktop.
+STAGE_LIST="stage0 stage1 stage2 stage-mgmt"

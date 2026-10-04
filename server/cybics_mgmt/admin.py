@@ -1,6 +1,7 @@
 """
-Organiser UI (/admin). One shared admin password (MGMT_ADMIN_PASSWORD); every
-form that changes state carries a CSRF token. This module holds the blueprint,
+Organiser UI (/admin). One shared admin password: MGMT_ADMIN_PASSWORD, or, if
+that is not set, the one the first visit sets in the browser (stored as a
+hash). Every form that changes state carries a CSRF token. This module holds the blueprint,
 login and what every admin page shares; the CTF pages live in ctf/admin.py.
 """
 import csv
@@ -11,11 +12,14 @@ from flask import Blueprint, Response, current_app, flash, redirect, render_temp
 from werkzeug.exceptions import HTTPException
 from werkzeug.routing import RequestRedirect as RoutingRequestRedirect
 
+from . import host
 from .db import get_db, now, transaction
 from .errors import MgmtError
 from .security import (
+    ADMIN_PASSWORD_MIN,
     HashingBusy,
     admin_required,
+    admin_setup_needed,
     audit,
     check_admin_password,
     check_csrf,
@@ -24,10 +28,17 @@ from .security import (
     hash_token,
     is_admin,
     limiter,
+    set_admin_password,
     start_admin_session,
 )
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
+
+
+@bp.context_processor
+def _host_warning():
+    # On the Raspberry Pi image: every admin page warns while pi / raspberry still works.
+    return {"pi_default_password": bool(host.directory()) and host.status()["pi_default_password"] is True}
 
 
 @bp.before_request
@@ -54,6 +65,8 @@ def _mgmt_error(exc):
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
+    if admin_setup_needed():
+        return redirect(url_for("admin.setup"))
     if request.method == "POST":
         # Only failures count. A lockout still blocks a correct password, or it
         # would tell a guesser when they got it right; an organiser locked out
@@ -95,7 +108,7 @@ def _safe_next(target):
         endpoint, values = current_app.url_map.bind("localhost").match(parts.path, method="GET")
     except (HTTPException, RoutingRequestRedirect):
         return fallback
-    if not endpoint.startswith("admin.") or endpoint in ("admin.login", "admin.login_link_page"):
+    if not endpoint.startswith("admin.") or endpoint in ("admin.login", "admin.login_link_page", "admin.setup"):
         return fallback
     # Built from a dict, not url_for(**kwargs): a query key such as "endpoint"
     # would otherwise be read as one of url_for's own arguments. No admin page
@@ -108,6 +121,80 @@ def _back_here():
     """Back to the admin page the form came from (same site only), else the event list."""
     parts = urlsplit(request.referrer or "")
     return redirect(_safe_next(parts.path + ("?" + parts.query if parts.query else "")))
+
+
+def _password_problem(password, confirm):
+    """Why a new admin password is not acceptable, or None."""
+    from .ctf.logic import COMMON_PASSWORDS
+    if password != confirm:
+        return "The two passwords differ."
+    if len(password) < ADMIN_PASSWORD_MIN:
+        return f"The admin password needs at least {ADMIN_PASSWORD_MIN} characters."
+    if len(password) > 256:
+        return "The admin password may have at most 256 characters."
+    if password.lower() in COMMON_PASSWORDS or len(set(password)) == 1:
+        return "This password is too easy to guess."
+    return None
+
+
+@bp.route("/setup", methods=["GET", "POST"])
+def setup():
+    """
+    The first visit sets the admin password, unless MGMT_ADMIN_PASSWORD is set.
+    Whoever comes first decides: set it before participants join the network,
+    or set MGMT_ADMIN_PASSWORD.
+    """
+    if not admin_setup_needed():
+        return redirect(url_for("admin.login"))
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        problem = _password_problem(password, request.form.get("confirm", ""))
+        if problem:
+            flash(problem, "error")
+        elif not set_admin_password(password, first=True):
+            flash("Somebody set the admin password a moment ago. Log in with it.", "error")
+            return redirect(url_for("admin.login"))
+        else:
+            start_admin_session()
+            audit("admin_password_set")
+            flash("Admin password set. You are logged in.", "ok")
+            return redirect(url_for("admin.events"))
+    return render_template("admin/setup.html", minimum=ADMIN_PASSWORD_MIN)
+
+
+@bp.route("/password", methods=["GET", "POST"])
+@admin_required
+def password():
+    """
+    The admin password (when set in the browser; every other session ends on a
+    change) and, on the Raspberry Pi image, the password of its pi account.
+    """
+    from_env = bool(current_app.config.get("ADMIN_PASSWORD"))
+    if request.method == "POST":
+        target = request.form.get("target")
+        new, confirm = request.form.get("password", ""), request.form.get("confirm", "")
+        if target == "admin" and not from_env:
+            problem = _password_problem(new, confirm)
+            if not check_admin_password(request.form.get("current", "")):
+                flash("The current password is wrong.", "error")
+            elif problem:
+                flash(problem, "error")
+            else:
+                set_admin_password(new)
+                start_admin_session()   # the old fingerprint ended every session, this one included
+                audit("admin_password_changed")
+                flash("Admin password changed. Every other session has ended.", "ok")
+        elif target == "pi" and host.directory():
+            problem = host.pi_password_problem(new, confirm)
+            if problem:
+                flash(problem, "error")
+            else:
+                host.request_pi_password(new)
+                audit("pi_password_requested")
+                flash("Sent to the Raspberry Pi; it applies the new password in a moment.", "ok")
+        return redirect(url_for("admin.password"))
+    return render_template("admin/password.html", from_env=from_env, minimum=ADMIN_PASSWORD_MIN,
+                           host=host.status() if host.directory() else None, pi_minimum=host.PI_PASSWORD_MIN)
 
 
 @bp.get("/login/link/<token>")
@@ -147,11 +234,11 @@ def logout():
 # clear them: behind a shared NAT address, one participant can trip them for
 # the whole room (docs/ARCHITECTURE.md, "Shared addresses").
 LOCKOUTS = (
-    ("enroll-fail:", "RATE_LIMIT_ENROLL", "wrong team passwords"),
+    ("join-fail:", "RATE_LIMIT_JOIN", "wrong team passwords"),
     ("newteam:", "RATE_LIMIT_NEW_TEAMS", "new teams"),
-    ("badtoken:", "RATE_LIMIT_BAD_TOKEN", "unknown instance or device tokens"),
-    ("enrolcode-fail:", "RATE_LIMIT_ENROL_CODE", "unknown fleet enrolment codes"),
-    ("newdevice:", "RATE_LIMIT_NEW_DEVICES", "new fleet devices"),
+    ("badtoken:", "RATE_LIMIT_BAD_TOKEN", "unknown device tokens"),
+    ("enrolcode-fail:", "RATE_LIMIT_ENROL_CODE", "unknown enrolment codes"),
+    ("newdevice:", "RATE_LIMIT_NEW_DEVICES", "new devices"),
     ("login:", "RATE_LIMIT_LOGIN", "failed admin logins"),
 )
 

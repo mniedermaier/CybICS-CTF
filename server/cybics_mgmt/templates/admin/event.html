@@ -12,14 +12,14 @@
     <h2>Join code</h2>
     <div class="joincode">{{ event.join_code }}</div>
     <p class="muted">Participants enter this in their CybICS landing page together with this server's address.</p>
-    <form method="post" action="{{ url_for('admin.event_join_code', event_id=event.id) }}" data-confirm="Generate a new join code? The current one stops working for new enrolments.">
+    <form method="post" action="{{ url_for('admin.event_join_code', event_id=event.id) }}" data-confirm="Generate a new join code? The current one stops working for new joins.">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <button class="secondary" type="submit">Generate new code</button>
     </form>
   </div>
   <div class="panel">
     <h2>State</h2>
-    <p class="muted">Solves only count while the event is <strong>running</strong>. Instances can enrol in any state except finished.
+    <p class="muted">Solves only count while the event is <strong>running</strong>. Devices can join in any state except finished.
        The scoreboard stays private while the event is a draft.</p>
     <form method="post" action="{{ url_for('admin.event_state', event_id=event.id) }}" class="row">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
@@ -40,7 +40,7 @@
     <h2>Instances</h2>
     <div class="stats">
       <div class="stat"><div class="value">{{ stats.online or 0 }}</div><div class="label">online</div></div>
-      <div class="stat"><div class="value">{{ stats.total or 0 }}</div><div class="label">enrolled</div></div>
+      <div class="stat"><div class="value">{{ stats.total or 0 }}</div><div class="label">devices</div></div>
       <div class="stat"><div class="value">{{ stats.physical or 0 }}</div><div class="label">physical</div></div>
       <div class="stat"><div class="value">{{ challenge_count }}</div><div class="label">challenges</div></div>
     </div>
@@ -62,7 +62,7 @@
     <h2>Announcements</h2>
     <form method="post" action="{{ url_for('admin.announce', event_id=event.id) }}">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <textarea name="message" maxlength="1000" placeholder="Shown on every enrolled CybICS landing page" aria-label="Announcement" required></textarea>
+      <textarea name="message" maxlength="1000" placeholder="Shown on the landing page of every device in the event" aria-label="Announcement" required></textarea>
       <button type="submit">Send</button>
     </form>
     <table>
@@ -82,7 +82,7 @@
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <p><label class="sr-only" for="event-name">Event name</label><input type="text" id="event-name" name="name" value="{{ event.name }}" required size="32"></p>
       <label class="check"><input type="checkbox" name="scoreboard_public" {{ 'checked' if event.scoreboard_public }}> Public scoreboard</label>
-      <label class="check"><input type="checkbox" name="allow_team_registration" {{ 'checked' if event.allow_team_registration }}> Teams can register themselves when enrolling</label>
+      <label class="check"><input type="checkbox" name="allow_team_registration" {{ 'checked' if event.allow_team_registration }}> Teams can register themselves when joining</label>
       <label class="check">First blood bonus
         <input type="number" name="first_blood_bonus" value="{{ event.first_blood_bonus }}" min="0" max="100" step="1"> %
         <span class="muted">of the challenge's points, for the first team to solve it (0 = off)</span></label>
@@ -91,7 +91,7 @@
   </div>
   <div class="panel">
     <h2>Delete event</h2>
-    <p class="muted">Removes the event with all teams, instances and solves. This cannot be undone.</p>
+    <p class="muted">Removes the event with all teams and solves; the devices stay in the fleet. This cannot be undone.</p>
     <form method="post" action="{{ url_for('admin.event_delete', event_id=event.id) }}" class="row">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
       <input type="text" name="confirm" placeholder="type {{ event.slug }}" aria-label="Type {{ event.slug }} to confirm deletion" required>

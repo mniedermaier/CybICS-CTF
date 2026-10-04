@@ -1,0 +1,38 @@
+# The default network of a CybICS classroom: CybICS boards with a USB Wi-Fi
+# dongle join it on their own and enrol with this server.
+#
+# 2.4 GHz on a fixed channel: the boards' Raspberry Pi Zero 2 W and a Pi 3
+# hosting this image have no 5 GHz radio. method=shared hands out addresses
+# (NetworkManager's dnsmasq) in 10.42.0.0/24, away from the boards' own
+# training AP (10.0.0.0/24). It also NATs clients out of eth0 if the Pi has an
+# uplink there; the boards never route through it (their uplink profile is
+# never-default).
+#
+# cybics-mgmt-config rewrites ssid and psk from cybics-mgmt.txt on the boot
+# partition at every boot. Keyfiles only allow comments on lines of their own.
+[connection]
+id=cybics-mgmt-ap
+type=wifi
+interface-name=wlan0
+autoconnect=true
+autoconnect-priority=100
+
+[wifi]
+mode=ap
+ssid=cybics-mgmt
+band=bg
+channel=6
+
+[wifi-security]
+key-mgmt=wpa-psk
+proto=rsn
+pairwise=ccmp
+group=ccmp
+psk=cybics-mgmt
+
+[ipv4]
+method=shared
+address1=10.42.0.1/24
+
+[ipv6]
+method=disabled

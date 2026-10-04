@@ -10,7 +10,7 @@ from werkzeug.serving import make_server
 from conftest import FLAGS
 from cybics_mgmt.ctf import logic as ctf
 from cybics_mgmt.db import get_db
-from cybics_mgmt_client import CTFClient, CTFClientError
+from cybics_mgmt_client import MgmtClient, MgmtClientError
 
 
 @pytest.fixture
@@ -29,7 +29,8 @@ class Landing:
         self.solved = list(solved)
 
     def client(self, path):
-        return CTFClient(str(path), local_solves=lambda: self.solved, flag_for=FLAGS.get,
+        return MgmtClient(str(path), local_solves=lambda: self.solved, flag_for=FLAGS.get,
+                          device_info=lambda: dict(VIRTUAL),
                          status=lambda: {"cybics_version": "1.2.3", "services": {"openplc": True}})
 
     def solve(self, client, challenge):
@@ -40,17 +41,24 @@ class Landing:
 VIRTUAL = {"kind": "virtual", "hostname": "laptop", "cybics_version": "1.2.3", "mode": "full"}
 
 
+def connect(client, server, join_code, team, password):
+    """Enrol the device (with the event's join code) if needed, then join the team."""
+    if not client.state["enabled"]:
+        client.enroll(server, join_code)
+    return client.join_event(join_code, team, password)
+
+
 def test_disabled_client_does_nothing(tmp_path):
-    client = CTFClient(str(tmp_path / "state.json"))
+    client = MgmtClient(str(tmp_path / "state.json"))
     client.report_solve("physical_process", "CybICS(x)")
     assert client.sync_once() is False
-    assert client.snapshot()["pending"] == 0
+    assert client.snapshot()["ctf"]["pending"] == 0
 
 
 def test_test_connection(server, tmp_path):
-    client = CTFClient(str(tmp_path / "s.json"))
+    client = MgmtClient(str(tmp_path / "s.json"))
     assert client.test_connection(server)["api_version"] == 1
-    with pytest.raises(CTFClientError) as exc:
+    with pytest.raises(MgmtClientError) as exc:
         client.test_connection("http://127.0.0.1:1")
     assert exc.value.code == "unreachable"
 
@@ -58,30 +66,30 @@ def test_test_connection(server, tmp_path):
 def test_enroll_report_and_sync(server, event, tmp_path):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     landing.solve(client, "physical_process")
-    assert client.snapshot()["pending"] == 1
+    assert client.snapshot()["ctf"]["pending"] == 1
     assert client.sync_once()
     snap = client.snapshot()
-    assert snap["pending"] == 0
+    assert snap["ctf"]["pending"] == 0
     assert "token" not in snap
     # the score updates on the heartbeat after the flush
     client.sync_once()
-    assert client.snapshot()["standing"]["score"] == 100
+    assert client.snapshot()["ctf"]["standing"]["score"] == 100
 
 
 def test_outbox_survives_restart_and_outage(server, event, tmp_path, app):
     landing = Landing()
     path = tmp_path / "s.json"
     client = landing.client(path)
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.state["server_url"] = "http://127.0.0.1:1"   # server "down"
     landing.solve(client, "physical_process")
     assert client.sync_once() is False
     assert client.snapshot()["last_error"]["code"] == "unreachable"
 
     restarted = landing.client(path)                     # landing container restarts
-    assert restarted.snapshot()["pending"] == 1
+    assert restarted.snapshot()["ctf"]["pending"] == 1
     restarted.state["server_url"] = server               # server back
     assert restarted.sync_once()
     with app.app_context():
@@ -91,7 +99,7 @@ def test_outbox_survives_restart_and_outage(server, event, tmp_path, app):
 def test_reconciliation_resends_lost_solves(server, event, tmp_path, app):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     landing.solved.append("plc_programming")             # solved, but the report was lost
     client.sync_once()   # heartbeat notices the gap and queues it
     client.sync_once()
@@ -102,7 +110,7 @@ def test_reconciliation_resends_lost_solves(server, event, tmp_path, app):
 def test_solves_from_before_enrolment_are_not_reported(server, event, tmp_path, app):
     landing = Landing(solved=["physical_process", "plc_programming"])  # old progress on a reused Pi
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.sync_once()
     client.sync_once()
     with app.app_context():
@@ -112,7 +120,7 @@ def test_solves_from_before_enrolment_are_not_reported(server, event, tmp_path, 
 def test_solve_while_paused_does_not_count_later(server, event, tmp_path, app):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     with app.app_context():
         ctf.set_event_state(get_db(), event["id"], "paused")
     client.sync_once()                         # the client learns about the pause ...
@@ -129,16 +137,21 @@ def test_solve_while_paused_does_not_count_later(server, event, tmp_path, app):
 def test_revoked_instance_stops_syncing(server, event, tmp_path, app):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     with app.app_context():
-        ctf.revoke_instance(get_db(), client.state["instance_id"])
-    assert client.sync_once() is False
-    assert client.snapshot()["enabled"] is False
+        ctf.revoke_instance(get_db(), client.state["ctf"]["instance_id"])
+    landing.solve(client, "physical_process")
+    assert client.sync_once() is True                   # the device itself is fine
+    snap = client.snapshot()
+    assert snap["enabled"] is True and snap["ctf"]["joined"] is False and snap["ctf"]["removed"] is True
+    assert snap["ctf"]["pending"] == 1                  # kept for when it is back
 
 
 def test_leave(server, event, tmp_path):
     client = Landing().client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
+    client.leave_event()
+    assert client.snapshot()["ctf"]["joined"] is False and client.snapshot()["enabled"] is True
     client.leave()
     assert client.snapshot()["enabled"] is False
     assert client.state["token"] is None
@@ -146,33 +159,33 @@ def test_leave(server, event, tmp_path):
 
 def test_enroll_error_is_readable(server, tmp_path):
     client = Landing().client(tmp_path / "s.json")
-    with pytest.raises(CTFClientError) as exc:
-        client.enroll(server, "WRONG123", "Red Team", "secret-12", VIRTUAL)
-    assert exc.value.code == "invalid_join_code"
-    assert exc.value.message == "Unknown join code."
+    with pytest.raises(MgmtClientError) as exc:
+        connect(client, server, "WRONG123", "Red Team", "secret-12")
+    assert exc.value.code == "invalid_code"
+    assert exc.value.message == "Unknown enrolment code."
 
 
 def test_url_normalisation():
-    assert CTFClient.normalize_url("10.10.0.1:8000/") == "http://10.10.0.1:8000"
-    assert CTFClient.normalize_url("https://ctf.example.org") == "https://ctf.example.org"
-    with pytest.raises(CTFClientError):
-        CTFClient.normalize_url("ftp://x")
+    assert MgmtClient.normalize_url("10.10.0.1:8000/") == "http://10.10.0.1:8000"
+    assert MgmtClient.normalize_url("https://ctf.example.org") == "https://ctf.example.org"
+    with pytest.raises(MgmtClientError):
+        MgmtClient.normalize_url("ftp://x")
 
 
 # ---------- regressions from review ----------
 
 def test_stale_401_does_not_disable_a_new_enrolment(server, event, tmp_path, app, monkeypatch):
-    """Leave + re-enrol while a heartbeat with the old token is in flight."""
+    """Disconnect + re-enrol while a heartbeat with the old token is in flight."""
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     real_request = client._request
 
     def leave_and_reenrol_mid_request(method, path, **kw):
         if path == "/heartbeat":
             monkeypatch.setattr(client, "_request", real_request)
-            client.leave()                                    # old token revoked ...
-            client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+            client.leave()                                    # old device retired ...
+            connect(client, server, event["join_code"], "Red Team", "secret-12")
         return real_request(method, path, **kw)              # ... so this answers 401
 
     monkeypatch.setattr(client, "_request", leave_and_reenrol_mid_request)
@@ -184,7 +197,7 @@ def test_stale_401_does_not_disable_a_new_enrolment(server, event, tmp_path, app
 def test_unknown_result_values_are_held_like_invalid_flag(server, event, tmp_path, monkeypatch):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     landing.solve(client, "physical_process")
     real_request = client._request
 
@@ -196,15 +209,15 @@ def test_unknown_result_values_are_held_like_invalid_flag(server, event, tmp_pat
     monkeypatch.setattr(client, "_request", future_server)
     client.sync_once()
     snap = client.snapshot()
-    assert snap["pending"] == 0
-    assert "physical_process" not in snap["rejected"]
-    assert "physical_process" in client.state["held"]
+    assert snap["ctf"]["pending"] == 0
+    assert "physical_process" not in snap["ctf"]["rejected"]
+    assert "physical_process" in client.state["ctf"]["held"]
 
 
 def test_a_non_string_result_does_not_wedge_the_outbox(server, event, tmp_path, monkeypatch):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     landing.solve(client, "physical_process")
     real_request = client._request
 
@@ -215,7 +228,7 @@ def test_a_non_string_result_does_not_wedge_the_outbox(server, event, tmp_path, 
 
     monkeypatch.setattr(client, "_request", odd_server)
     client.sync_once()
-    assert client.snapshot()["pending"] == 0
+    assert client.snapshot()["ctf"]["pending"] == 0
 
 
 def test_an_unwritable_state_file_is_a_client_error(server, event, tmp_path, monkeypatch):
@@ -225,10 +238,10 @@ def test_an_unwritable_state_file_is_a_client_error(server, event, tmp_path, mon
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(client, "_save", full_disk)
-    with pytest.raises(CTFClientError) as exc:
-        client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    with pytest.raises(MgmtClientError) as exc:
+        connect(client, server, event["join_code"], "Red Team", "secret-12")
     assert exc.value.code == "state_unwritable"
-    with pytest.raises(CTFClientError) as exc:
+    with pytest.raises(MgmtClientError) as exc:
         client.leave()
     assert exc.value.code == "state_unwritable"
     assert client.snapshot()["enabled"] is False
@@ -241,11 +254,11 @@ def test_unknown_challenge_is_retried_after_catalog_change(server, event, tmp_pa
         ctf.update_challenge(db, event["id"], cid, 100, False)      # disabled for now
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     landing.solve(client, "physical_process")
     client.sync_once()
     client.sync_once()
-    assert "physical_process" in client.state["held"]
+    assert "physical_process" in client.state["ctf"]["held"]
     with app.app_context():
         assert ctf.scoreboard(get_db(), event["id"])[0]["score"] == 0
         ctf.update_challenge(get_db(), event["id"], cid, 100, True)  # organiser re-enables it
@@ -258,19 +271,19 @@ def test_unknown_challenge_is_retried_after_catalog_change(server, event, tmp_pa
 def test_client_errors_on_a_solve_are_final(server, event, tmp_path):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.report_solve("physical_process", None)    # the server answers 400 invalid_input
     assert client.sync_once() is True
-    assert client.snapshot()["pending"] == 0
+    assert client.snapshot()["ctf"]["pending"] == 0
 
 
 def test_enrol_fails_if_progress_is_unreadable(server, event, tmp_path, app):
     def broken():
         raise ValueError("progress file is mid-write")
 
-    client = CTFClient(str(tmp_path / "s.json"), local_solves=broken)
-    with pytest.raises(CTFClientError) as exc:
-        client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    client = MgmtClient(str(tmp_path / "s.json"), local_solves=broken, device_info=lambda: dict(VIRTUAL))
+    with pytest.raises(MgmtClientError) as exc:
+        connect(client, server, event["join_code"], "Red Team", "secret-12")
     assert exc.value.code == "progress_unreadable"
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM instances").fetchone()[0] == 0
@@ -279,28 +292,31 @@ def test_enrol_fails_if_progress_is_unreadable(server, event, tmp_path, app):
 def test_banned_team_keeps_retrying_and_recovers(server, event, tmp_path, app):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     with app.app_context():
-        ctf.set_team_banned(get_db(), client.state["team"]["id"], True)
+        ctf.set_team_banned(get_db(), client.state["ctf"]["team"]["id"], True)
+    landing.solve(client, "physical_process")
     assert client.sync_once() is False
-    assert client.snapshot()["enabled"] is True
+    assert client.snapshot()["enabled"] is True and client.snapshot()["ctf"]["standing"]["banned"] is True
     assert client.snapshot()["last_error"]["code"] == "team_banned"
+    assert client.snapshot()["ctf"]["pending"] == 1                  # kept, not dropped
     with app.app_context():
-        ctf.set_team_banned(get_db(), client.state["team"]["id"], False)
+        ctf.set_team_banned(get_db(), client.state["ctf"]["team"]["id"], False)
     assert client.sync_once() is True
+    assert client.snapshot()["ctf"]["pending"] == 0
 
 
 def test_solve_in_flight_during_pause_counts_after_resume(server, event, tmp_path, app):
     """Solved while running, but the report only arrives after the organiser paused."""
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.sync_once()
     landing.solve(client, "physical_process")         # while running
     with app.app_context():
         ctf.set_event_state(get_db(), event["id"], "paused")
     client.sync_once()                                # delivered during the pause
-    assert "physical_process" in client.state["held_paused"]
+    assert "physical_process" in client.state["ctf"]["held_paused"]
     with app.app_context():
         ctf.set_event_state(get_db(), event["id"], "running")
     client.sync_once()
@@ -317,7 +333,7 @@ def test_transport_failures_become_client_errors(server, event, tmp_path, monkey
 
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
 
     class FakeResponse(io.BytesIO):
         status = 200
@@ -342,7 +358,7 @@ def test_transport_failures_become_client_errors(server, event, tmp_path, monkey
 def test_sender_thread_survives_unexpected_errors(tmp_path, monkeypatch):
     import threading as _t
 
-    client = CTFClient(str(tmp_path / "s.json"))
+    client = MgmtClient(str(tmp_path / "s.json"))
     client.state["enabled"] = True
     client.state["heartbeat_interval"] = 5
     calls = []
@@ -364,27 +380,27 @@ def test_sender_thread_survives_unexpected_errors(tmp_path, monkeypatch):
 def test_report_solve_never_raises(server, event, tmp_path, monkeypatch):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
 
     def full_disk():
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(client, "_save", full_disk)
     client.report_solve("physical_process", FLAGS["physical_process"])   # must not raise
-    assert client.snapshot()["pending"] == 1
+    assert client.snapshot()["ctf"]["pending"] == 1
     assert client.snapshot()["last_error"]["code"] == "storage"
 
 
 def test_reenrol_after_revocation_keeps_unreported_solves(server, event, tmp_path, app):
     landing = Landing(solved=["defense_firewall"])       # old progress: baseline
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     with app.app_context():
-        ctf.revoke_instance(get_db(), client.state["instance_id"])   # organiser's mistake
+        ctf.revoke_instance(get_db(), client.state["ctf"]["instance_id"])   # organiser's mistake
     client.sync_once()
-    assert client.snapshot()["enabled"] is False
+    assert client.snapshot()["ctf"]["joined"] is False
     landing.solve(client, "physical_process")           # solved while revoked
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.sync_once()
     client.sync_once()
     with app.app_context():
@@ -395,13 +411,13 @@ def test_reenrol_after_revocation_keeps_unreported_solves(server, event, tmp_pat
 def test_leave_and_rejoin_keeps_queue_but_not_solves_made_while_away(server, event, tmp_path, app):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.state["server_url"] = "http://127.0.0.1:1"                          # offline for now
     landing.solve(client, "physical_process")                                   # queued, unsent
     client.state["server_url"] = server
-    client.leave()
+    client.leave_event()
     landing.solved.append("plc_programming")                                    # while away
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.sync_once()
     client.sync_once()
     with app.app_context():
@@ -412,12 +428,12 @@ def test_leave_and_rejoin_keeps_queue_but_not_solves_made_while_away(server, eve
 def test_switching_team_does_not_carry_solves_over(server, event, tmp_path, app):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Team Alpha", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Team Alpha", "secret-12")
     client.sync_once()
     landing.solve(client, "physical_process")
     client.sync_once()
-    client.leave()
-    client.enroll(server, event["join_code"], "Team Bravo", "secret-12", VIRTUAL)
+    client.leave_event()
+    connect(client, server, event["join_code"], "Team Bravo", "secret-12")
     client.sync_once()
     client.sync_once()
     with app.app_context():
@@ -430,7 +446,7 @@ def test_foreign_401_does_not_unenrol(server, event, tmp_path, monkeypatch):
     import urllib.error
     import urllib.request
     client = Landing().client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
 
     def captive_portal(req, *a, **kw):
         raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b"<html>login</html>"))
@@ -441,24 +457,40 @@ def test_foreign_401_does_not_unenrol(server, event, tmp_path, monkeypatch):
 
 def test_deleted_announcements_disappear(server, event, tmp_path, app):
     client = Landing().client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     with app.app_context():
         ctf.add_announcement(get_db(), event["id"], "oops")
     client.sync_once()
-    assert [a["message"] for a in client.snapshot()["announcements"]] == ["oops"]
+    assert [a["message"] for a in client.snapshot()["ctf"]["announcements"]] == ["oops"]
     with app.app_context():
         aid = get_db().execute("SELECT id FROM announcements").fetchone()["id"]
         ctf.delete_announcement(get_db(), event["id"], aid)
     client.sync_once()
-    assert client.snapshot()["announcements"] == []
+    assert client.snapshot()["ctf"]["announcements"] == []
 
 
-def test_incomplete_enrol_answer_is_a_client_error(tmp_path, monkeypatch):
-    client = CTFClient(str(tmp_path / "s.json"))
-    monkeypatch.setattr(client, "_request", lambda *a, **kw: (201, {"team": {}}))
-    with pytest.raises(CTFClientError) as exc:
-        client.enroll("http://x", "CODE", "Team", "pass", VIRTUAL)
+def test_incomplete_answers_are_client_errors(tmp_path, monkeypatch):
+    import cybics_mgmt_client
+    client = MgmtClient(str(tmp_path / "s.json"))
+    monkeypatch.setattr(cybics_mgmt_client, "_http", lambda *a, **kw: (201, {"team": {}}))
+    with pytest.raises(MgmtClientError) as exc:
+        client.enroll("http://x", "CODE")
     assert exc.value.code == "bad_response"
+    monkeypatch.setattr(cybics_mgmt_client, "_http", lambda *a, **kw: (
+        201, {"token": "t", "device_id": "d", "signing_key": {"n": "ff", "e": 65537}}))
+    with pytest.raises(MgmtClientError) as exc:
+        client.enroll("http://x", "CODE")
+    assert exc.value.code == "bad_key"
+    client.state.update({"enabled": True, "token": "t", "server_url": "http://x"})
+    with pytest.raises(MgmtClientError) as exc:
+        client.join_event("CODE", "Team", "pass")
+    assert exc.value.code == "bad_response"
+
+
+def test_joining_needs_an_enrolment(tmp_path):
+    with pytest.raises(MgmtClientError) as exc:
+        MgmtClient(str(tmp_path / "s.json")).join_event("CODE", "Team", "pass")
+    assert exc.value.code == "not_enrolled"
 
 
 def test_proxy_error_pages_do_not_drop_solves(server, event, tmp_path, monkeypatch):
@@ -468,7 +500,7 @@ def test_proxy_error_pages_do_not_drop_solves(server, event, tmp_path, monkeypat
 
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.sync_once()
     landing.solve(client, "physical_process")
     real = urllib.request.urlopen
@@ -481,26 +513,26 @@ def test_proxy_error_pages_do_not_drop_solves(server, event, tmp_path, monkeypat
 
     monkeypatch.setattr(urllib.request, "urlopen", proxy_404)
     client.sync_once()
-    assert client.snapshot()["pending"] == 1 and client.snapshot()["rejected"] == []
+    assert client.snapshot()["ctf"]["pending"] == 1 and client.snapshot()["ctf"]["rejected"] == []
     monkeypatch.setattr(urllib.request, "urlopen", real)
     client.sync_once()
-    assert client.snapshot()["pending"] == 0
+    assert client.snapshot()["ctf"]["pending"] == 0
     client.sync_once()
-    assert client.snapshot()["standing"]["score"] == 100
+    assert client.snapshot()["ctf"]["standing"]["score"] == 100
 
 
 def test_pause_during_flush_holds_the_solve(server, event, tmp_path, app):
     """The heartbeat still said running; the organiser pauses before the solve is posted."""
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.sync_once()
     landing.solve(client, "physical_process")
     client._heartbeat()                                   # sees "running"
     with app.app_context():
         ctf.set_event_state(get_db(), event["id"], "paused")
     client._flush_outbox()                                # answered event_not_running
-    assert client.state["held_paused"] == ["physical_process"]
+    assert client.state["ctf"]["held_paused"] == ["physical_process"]
     with app.app_context():
         ctf.set_event_state(get_db(), event["id"], "running")
     client.sync_once()
@@ -512,13 +544,13 @@ def test_pause_during_flush_holds_the_solve(server, event, tmp_path, app):
 def test_solves_held_at_the_end_count_if_the_event_is_reopened(server, event, tmp_path, app):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.sync_once()
     landing.solve(client, "physical_process")            # while running, but stuck in the outbox
     with app.app_context():
         ctf.set_event_state(get_db(), event["id"], "finished")
     client.sync_once()
-    assert client.state["held_paused"] == ["physical_process"] and client.state["rejected"] == []
+    assert client.state["ctf"]["held_paused"] == ["physical_process"] and client.state["ctf"]["rejected"] == []
     with app.app_context():
         ctf.set_event_state(get_db(), event["id"], "running")   # finished by mistake: reopened
     client.sync_once()
@@ -536,9 +568,9 @@ def test_garbage_heartbeat_interval_is_tamed(value):
 def test_recreated_event_with_the_same_slug_starts_fresh(server, event, tmp_path, app):
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
-    client.state["rejected"] = ["physical_process"]          # from a dry run
-    client.leave()
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
+    client.state["ctf"]["rejected"] = ["physical_process"]          # from a dry run
+    client.leave_event()
     with app.app_context():
         db = get_db()
         ctf.delete_event(db, event["id"])
@@ -549,8 +581,8 @@ def test_recreated_event_with_the_same_slug_starts_fresh(server, event, tmp_path
         ctf.import_catalog(db, fresh["id"], _json.dumps(CATALOG))
         ctf.set_event_state(db, fresh["id"], "running")
     landing.solve(client, "physical_process")
-    client.enroll(server, fresh["join_code"], "Red Team", "secret-12", VIRTUAL)
-    assert client.state["rejected"] == [], "nothing carries over from the deleted event"
+    connect(client, server, fresh["join_code"], "Red Team", "secret-12")
+    assert client.state["ctf"]["rejected"] == [], "nothing carries over from the deleted event"
 
 
 
@@ -565,11 +597,11 @@ def test_wrong_catalog_is_recoverable(server, event, tmp_path, app):
         ctf.import_catalog(get_db(), event["id"], _json.dumps(wrong))
     landing = Landing()
     client = landing.client(tmp_path / "s.json")
-    client.enroll(server, event["join_code"], "Red Team", "secret-12", VIRTUAL)
+    connect(client, server, event["join_code"], "Red Team", "secret-12")
     client.sync_once()
     landing.solve(client, "physical_process")
     client.sync_once()
-    assert "physical_process" in client.state["held"]
+    assert "physical_process" in client.state["ctf"]["held"]
     with app.app_context():
         ctf.import_catalog(get_db(), event["id"], _json.dumps(CATALOG))   # the right file
     client.sync_once()

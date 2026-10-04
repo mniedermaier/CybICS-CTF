@@ -1,8 +1,9 @@
-"""The fleet: devices across events, groups, enrolment codes (docs/MGMT_DESIGN.md, phase 1)."""
+"""The fleet: devices across events, groups, enrolment codes, devices joining events."""
 import pytest
 
-from conftest import auth, enroll
-from cybics_mgmt.db import MIGRATIONS, connect, get_db, migrate
+from conftest import auth, enroll, enroll_device, join
+from cybics_mgmt.ctf import logic as ctf
+from cybics_mgmt.db import get_db
 from cybics_mgmt.fleet import logic as fleet
 
 CSRF = {"csrf": "csrf-test"}
@@ -21,7 +22,7 @@ def fleet_enroll(client, code, device=None, label=None, **kw):
     body = {"code": code, "device": device if device is not None else LAPTOP}
     if label is not None:
         body["label"] = label
-    return client.post("/api/v1/fleet/enroll", json=body, **kw)
+    return client.post("/api/v1/enroll", json=body, **kw)
 
 
 @pytest.fixture
@@ -37,78 +38,89 @@ def devices(app, **kw):
         return found
 
 
-# ---------- migration ----------
+# ---------- devices in events ----------
 
-def test_migration_gives_every_instance_a_legacy_device(tmp_path):
-    path = str(tmp_path / "v9.sqlite")
-    conn = connect(path)
-    for number, script in enumerate(MIGRATIONS[:9], start=1):
-        conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {number};\nCOMMIT;")
-    conn.executescript("""
-        INSERT INTO events (id, slug, name, join_code, created_at) VALUES (1, 'e', 'E', 'ABC', 0);
-        INSERT INTO teams (id, event_id, name, password_hash, created_at) VALUES (1, 1, 'T', 'x', 0);
-        INSERT INTO instances (id, team_id, token_hash, kind, device_uid, hostname, cybics_version,
-                               status_json, enrolled_at, last_seen)
-            VALUES ('i-1', 1, 'h1', 'physical', '00aabbccddee', 'cybics', '1.2.4', '{"mode":"full"}', 5, 9);
-    """)
-    conn.close()
-    migrate(path)
-    conn = connect(path)
-    row = conn.execute("SELECT * FROM devices").fetchone()
-    assert (row["id"], row["legacy"], row["kind"], row["device_uid"], row["last_seen"]) == (
-        "i-1", 1, "physical", "00aabbccddee", 9)
-    assert row["token_hash"] is None and row["status_json"] == '{"mode":"full"}'
-    assert conn.execute("SELECT device_id FROM instances").fetchone()["device_id"] == "i-1"
-    conn.close()
-
-
-# ---------- legacy devices from CTF enrolments ----------
-
-def test_ctf_enrolment_creates_a_legacy_device(client, app, event):
-    instance = enroll(client, event, **LAPTOP).get_json()
+def test_a_device_joins_an_event_and_leaves_it(client, app, event):
+    joined = enroll(client, event, **LAPTOP).get_json()
     [d] = devices(app)
-    assert d["id"] == instance["instance_id"] and d["legacy"] and d["ctf"] == "Red Team · Test Event"
-    assert d["state"] == "online"
-    client.post("/api/v1/heartbeat", headers=auth(instance["token"]),
-                json={"status": {"cybics_version": "1.2.5", "services": {"openplc": True, "fuxa": False}}})
+    assert d["id"] == joined["device_id"] and d["ctf"] == "Red Team · Test Event" and d["state"] == "online"
+    hb = client.post("/api/v1/heartbeat", headers=auth(joined["token"]), json={}).get_json()
+    assert hb["ctf"]["instance_id"] == joined["instance_id"] and hb["device"]["id"] == joined["device_id"]
+    client.delete("/api/v1/ctf/join", headers=auth(joined["token"]))
     [d] = devices(app)
-    assert d["cybics_version"] == "1.2.5" and (d["services_up"], d["services_total"]) == (1, 2)
+    assert d["ctf"] is None and d["state"] == "online"          # still a device in the fleet
 
 
-def test_a_revoked_instance_leaves_its_legacy_device_gone(client, app, event, admin):
-    instance = enroll(client, event).get_json()
-    admin.post(f"/admin/events/{event['id']}/instances/{instance['instance_id']}/revoke", data=CSRF)
-    assert devices(app) == []
-    [d] = devices(app, include_gone=True)
-    assert d["state"] == "gone"
-    page = admin.get("/admin/fleet?all=1").data.decode()
-    assert "gone" in page and instance["instance_id"][:8] in page
-
-
-def test_a_board_reenrolling_in_its_team_keeps_its_device(client, app, event):
-    first = enroll(client, event, **BOARD).get_json()
-    second = enroll(client, event, **{**BOARD, "cybics_version": "1.2.5"}).get_json()
-    assert first["instance_id"] != second["instance_id"]
-    [d] = devices(app)
-    assert d["id"] == first["instance_id"] and d["cybics_version"] == "1.2.5"
+def test_a_device_is_in_one_event_at_a_time(client, app, event):
     with app.app_context():
-        linked = get_db().execute("SELECT device_id FROM instances").fetchall()
-    assert {r["device_id"] for r in linked} == {first["instance_id"]}
+        other = dict(ctf.create_event(get_db(), "other", "Other"))
+    joined = enroll(client, event).get_json()
+    moved = join(client, joined["token"], other, team="Blue Team", password="blue-pass-1")
+    assert moved.status_code == 201
+    with app.app_context():
+        live = get_db().execute("SELECT COUNT(*) FROM instances WHERE revoked = 0").fetchone()[0]
+    assert live == 1 and devices(app)[0]["ctf"] == "Blue Team · Other"
 
 
-def test_a_board_uid_never_joins_a_device_across_teams(client, app, event, admin):
+def test_the_organiser_puts_a_device_into_a_team(client, app, event, admin):
+    with app.app_context():
+        team = ctf.create_team(get_db(), event["id"], "Blue Team", "blue-pass-1")
+        other = ctf.create_team(get_db(), event["id"], "Green Team", "green-pass-1")
+    device = enroll_device(client, make_code(app)["code"], **LAPTOP).get_json()
+    page = admin.get(f"/admin/fleet/devices/{device['device_id']}").data.decode()
+    assert "Test Event &middot; Blue Team" in page
+    admin.post(f"/admin/fleet/devices/{device['device_id']}/ctf", data={**CSRF, "team": str(team["id"])})
+    hb = client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={}).get_json()
+    assert hb["ctf"]["team"]["name"] == "Blue Team"
+    with app.app_context():
+        assert get_db().execute("SELECT joined_by FROM instances").fetchone()["joined_by"] == "organiser"
+    admin.post(f"/admin/fleet/devices/{device['device_id']}/ctf", data={**CSRF, "team": str(other["id"])})
+    assert devices(app)[0]["ctf"] == "Green Team · Test Event"
+    admin.post(f"/admin/fleet/devices/{device['device_id']}/ctf", data={**CSRF, "team": "leave"})
+    assert devices(app)[0]["ctf"] is None
+    log = admin.get(f"/admin/events/{event['id']}/log").data.decode()
+    assert "fleet_device_assign" in log
+    assert "fleet_device_leave_event" in admin.get("/admin/fleet/log").data.decode()
+
+
+def test_assigning_refuses_what_joining_refuses(client, app, event, admin):
+    with app.app_context():
+        db = get_db()
+        banned = ctf.create_team(db, event["id"], "Banned Team", "banned-pass")
+        ctf.set_team_banned(db, banned["id"], True)
+    device = enroll_device(client, make_code(app)["code"]).get_json()
+    url = f"/admin/fleet/devices/{device['device_id']}/ctf"
+    assert b"disqualified" in admin.post(url, data={**CSRF, "team": str(banned["id"])}, follow_redirects=True).data
+    assert b"Choose a team" in admin.post(url, data={**CSRF, "team": ""}, follow_redirects=True).data
+    assert b"Unknown team" in admin.post(url, data={**CSRF, "team": "999"}, follow_redirects=True).data
+    admin.post(f"/admin/fleet/devices/{device['device_id']}/retire", data=CSRF)
+    with app.app_context():
+        team = ctf.create_team(get_db(), event["id"], "Blue Team", "blue-pass-1")
+    assert b"retired" in admin.post(url, data={**CSRF, "team": str(team["id"])}, follow_redirects=True).data
+    assert admin.post("/admin/fleet/devices/nope/ctf", data={**CSRF, "team": "leave"}).status_code == 404
+
+
+def test_retiring_a_device_ends_its_participation(client, app, event, admin):
+    joined = enroll(client, event).get_json()
+    admin.post(f"/admin/fleet/devices/{joined['device_id']}/retire", data=CSRF)
+    with app.app_context():
+        assert ctf.participation(get_db(), joined["device_id"]) is None
+
+
+def test_a_board_uid_never_acts_across_teams(client, app, event, admin):
     enroll(client, event, team="Red Team", **BOARD)
     enroll(client, event, team="Blue Team", password="blue-pass-1", **BOARD)
     found = devices(app)
-    assert len(found) == 2 and all(d["uid_devices"] == 1 for d in found)
+    assert len(found) == 2 and all(d["uid_devices"] == 1 and d["ctf"] for d in found)
     assert "UID on 2 devices" in admin.get("/admin/fleet").data.decode()
+    assert "UID in 2 teams" in admin.get(f"/admin/events/{event['id']}/instances").data.decode()
 
 
 def test_deleting_an_event_keeps_its_devices(client, app, event, admin):
-    instance = enroll(client, event).get_json()
+    joined = enroll(client, event).get_json()
     admin.post(f"/admin/events/{event['id']}/delete", data={**CSRF, "confirm": event["slug"]})
-    [d] = devices(app, include_gone=True)
-    assert d["id"] == instance["instance_id"] and d["state"] == "gone"
+    [d] = devices(app)
+    assert d["id"] == joined["device_id"] and d["state"] == "online" and d["ctf"] is None
 
 
 # ---------- fleet enrolment ----------
@@ -121,7 +133,7 @@ def test_fleet_enrolment_with_a_code(client, app):
     assert data["device"] == {"id": data["device_id"], "label": "Board 7", "group": "Room 2"}
     assert data["token"] and data["heartbeat_interval"] == 30
     [d] = devices(app)
-    assert not d["legacy"] and d["device_uid"] == BOARD["device_uid"] and d["ctf"] is None
+    assert d["device_uid"] == BOARD["device_uid"] and d["ctf"] is None
     with app.app_context():
         assert get_db().execute("SELECT uses FROM enrol_codes").fetchone()["uses"] == 1
         assert get_db().execute("SELECT token_hash FROM devices").fetchone()["token_hash"] != data["token"]
@@ -155,7 +167,7 @@ def test_a_disabled_code_is_refused(client, app, admin):
     {"code": "\ud800", "device": LAPTOP},
 ])
 def test_unknown_codes_are_refused(client, body):
-    resp = client.post("/api/v1/fleet/enroll", json=body)
+    resp = client.post("/api/v1/enroll", json=body)
     assert resp.status_code == 404 and resp.get_json()["error"]["code"] == "invalid_code"
 
 
@@ -183,7 +195,7 @@ def test_unknown_codes_trip_a_lockout_the_organiser_sees(client, app, admin):
         fleet_enroll(client, "WRONG123")
     resp = fleet_enroll(client, code)
     assert resp.status_code == 429
-    assert "unknown fleet enrolment codes" in admin.get("/admin/").data.decode()
+    assert "unknown enrolment codes" in admin.get("/admin/").data.decode()
     admin.post("/admin/lockouts/clear", data=CSRF)
     assert fleet_enroll(client, code).status_code == 201
 
@@ -197,14 +209,14 @@ def test_new_devices_per_address_are_capped(client, app):
 # ---------- fleet heartbeat and leaving ----------
 
 def test_fleet_heartbeat_stores_the_status(client, app, device):
-    resp = client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={"status": {
+    resp = client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={"status": {
         "cybics_version": "1.3.0", "hostname": "renamed", "services": {"landing": True},
         "host": {"cpu_temp": 51.5}}})
     assert resp.status_code == 200
     assert resp.get_json()["device"]["id"] == device["device_id"]
     [d] = devices(app)
     assert (d["cybics_version"], d["hostname"], d["services_up"]) == ("1.3.0", "renamed", 1)
-    client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={})
+    client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={})
     assert devices(app)[0]["cybics_version"] == "1.3.0"   # no status keeps the last one
 
 
@@ -212,56 +224,34 @@ def test_fleet_heartbeat_discards_hostile_statuses(client, app, device):
     deep = {}
     for _ in range(50):
         deep = {"x": deep}
-    client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={"status": deep})
+    client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={"status": deep})
     with app.app_context():
         stored = get_db().execute("SELECT status_json FROM devices").fetchone()[0]
     assert "too deeply nested" in stored
-    client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={"status": {"x": "y" * 20000}})
+    client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={"status": {"x": "y" * 20000}})
     with app.app_context():
         assert "too large" in get_db().execute("SELECT status_json FROM devices").fetchone()[0]
 
 
 def test_fleet_heartbeat_needs_a_valid_token(client):
     for headers in ({}, auth("nope"), {"Authorization": "Bearer \ud800"}):
-        resp = client.post("/api/v1/fleet/heartbeat", headers=headers, json={})
+        resp = client.post("/api/v1/heartbeat", headers=headers, json={})
         assert resp.status_code == 401
 
 
 def test_retired_devices_are_locked_out_until_brought_back(client, app, device, admin):
     admin.post(f"/admin/fleet/devices/{device['device_id']}/retire", data=CSRF)
-    assert client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={}).status_code == 401
+    assert client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={}).status_code == 401
     assert devices(app) == []
     admin.post(f"/admin/fleet/devices/{device['device_id']}/restore", data=CSRF)
-    assert client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={}).status_code == 200
+    assert client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={}).status_code == 200
 
 
 def test_leaving_retires_the_device(client, app, device, admin):
-    assert client.delete("/api/v1/fleet/device", headers=auth(device["token"])).status_code == 204
-    assert client.post("/api/v1/fleet/heartbeat", headers=auth(device["token"]), json={}).status_code == 401
+    assert client.delete("/api/v1/device", headers=auth(device["token"])).status_code == 204
+    assert client.post("/api/v1/heartbeat", headers=auth(device["token"]), json={}).status_code == 401
     page = admin.get(f"/admin/fleet/devices/{device['device_id']}").data.decode()
     assert "retired" in page and "by the device itself" in page
-
-
-# ---------- CTF enrolment of a fleet device ----------
-
-def test_a_fleet_device_joins_a_ctf_event_without_a_legacy_device(client, app, event, device):
-    resp = client.post("/api/v1/enroll", json={
-        "join_code": event["join_code"], "team_name": "Red Team", "team_password": "secret-12",
-        "instance": LAPTOP, "device_token": device["token"]})
-    assert resp.status_code == 201
-    [d] = devices(app)
-    assert d["id"] == device["device_id"] and not d["legacy"] and d["ctf"] == "Red Team · Test Event"
-    # The CTF heartbeat of a native device does not overwrite its fleet status.
-    client.post("/api/v1/heartbeat", headers=auth(resp.get_json()["token"]),
-                json={"status": {"cybics_version": "9.9.9"}})
-    assert devices(app)[0]["cybics_version"] == "1.2.4"
-
-
-def test_an_unknown_device_token_at_ctf_enrolment_is_refused(client, event):
-    resp = client.post("/api/v1/enroll", json={
-        "join_code": event["join_code"], "team_name": "Red Team", "team_password": "secret-12",
-        "instance": LAPTOP, "device_token": "nope"})
-    assert resp.status_code == 403 and resp.get_json()["error"]["code"] == "invalid_device_token"
 
 
 # ---------- organiser pages ----------
@@ -353,3 +343,38 @@ def test_codes_never_collide_with_event_join_codes(app, event, monkeypatch):
     codes = iter([event["join_code"], "UNIQUE23"])
     monkeypatch.setattr(fleet, "new_join_code", lambda: next(codes))
     assert make_code(app)["code"] == "UNIQUE23"
+
+
+# ---------- the default enrolment code ----------
+
+def test_the_default_code_is_created_once_and_never_re_enabled(tmp_path, admin):
+    from conftest import ADMIN_PASSWORD, SIGNING_KEY
+    from cybics_mgmt import create_app
+    config = {"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite"), "SECRET_KEY": "test",
+              "ADMIN_PASSWORD": ADMIN_PASSWORD, "FLEET_SIGNING_KEY": SIGNING_KEY,
+              "DEFAULT_ENROL_CODE": "cybics-boards"}
+    app = create_app(config)
+    client = app.test_client()
+    assert enroll_device(client, "CYBICS-BOARDS", **BOARD).status_code == 201
+    with app.app_context():
+        db = get_db()
+        row = db.execute("SELECT * FROM enrol_codes").fetchone()
+        assert (row["code"], row["uses"]) == ("CYBICS-BOARDS", 1)
+        fleet.set_code_enabled(db, row["id"], False)
+    create_app(config)                                     # a restart
+    with app.app_context():
+        assert get_db().execute("SELECT enabled FROM enrol_codes").fetchone()["enabled"] == 0
+
+
+@pytest.mark.parametrize("code", ["no", "with space", "x" * 17])
+def test_a_malformed_default_code_stops_the_start(tmp_path, code):
+    from conftest import ADMIN_PASSWORD
+    from cybics_mgmt import create_app
+    with pytest.raises(ValueError):
+        create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite"), "SECRET_KEY": "test",
+                    "ADMIN_PASSWORD": ADMIN_PASSWORD, "DEFAULT_ENROL_CODE": code})
+
+
+def test_the_default_code_never_shadows_a_join_code(app, event):
+    with app.app_context(), pytest.raises(ValueError, match="join code"):
+        fleet.ensure_code(get_db(), event["join_code"], "x")

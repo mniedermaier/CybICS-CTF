@@ -5,7 +5,6 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY cybics_mgmt/ cybics_mgmt/
-COPY cybics_ctf/ cybics_ctf/
 COPY wsgi.py gunicorn.conf.py ./
 
 # Unlike the CybICS training containers, this one is a real service on a

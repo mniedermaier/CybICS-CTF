@@ -1,0 +1,3 @@
+# The server's request directory (cybics-mgmt-host): RAM only, owned by the
+# container's user (uid 10001), created before Docker starts.
+d /run/cybics-mgmt 0700 10001 10001 -

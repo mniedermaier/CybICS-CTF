@@ -1,0 +1,85 @@
+#!/usr/bin/python3
+"""
+Apply what the CybICS-mgmt server asks of this Raspberry Pi, and report.
+
+The server runs as a non-root user in a read-only container. It writes
+requests into /run/cybics-mgmt (a tmpfs, so a password never reaches the SD
+card), which it sees as MGMT_HOST_DIR. cybics-mgmt-host.path starts this
+script when a request appears; it also runs once at boot.
+
+Only one request exists: a new password for the "pi" account, applied with
+chpasswd. The request file is deleted before anything else happens. The
+answer, and whether pi still has the default password "raspberry", go to
+status.json for the admin UI.
+"""
+import hmac
+import json
+import os
+import re
+import subprocess
+import time
+
+DIRECTORY = "/run/cybics-mgmt"
+REQUEST = os.path.join(DIRECTORY, "pi-password.json")
+STATUS = os.path.join(DIRECTORY, "status.json")
+USER = "pi"
+
+
+def default_password():
+    """True while pi's password is still "raspberry" (checked with the system's crypt())."""
+    try:
+        with open("/etc/shadow", encoding="utf-8") as f:
+            entry = next((line.split(":") for line in f if line.startswith(USER + ":")), None)
+    except OSError:
+        return None
+    if not entry or len(entry) < 2 or not entry[1] or entry[1][0] in "!*":
+        return False
+    stored = entry[1]
+    result = subprocess.run(["perl", "-e", "print crypt($ARGV[0], $ARGV[1])", "raspberry", stored],
+                            capture_output=True, text=True, timeout=10)
+    return hmac.compare_digest(result.stdout, stored)
+
+
+def apply_request():
+    """Apply a waiting request. Returns the result for status.json, or None if there was none."""
+    try:
+        with open(REQUEST, encoding="utf-8") as f:
+            raw = f.read(4096)
+    except FileNotFoundError:
+        return None
+    finally:
+        if os.path.exists(REQUEST):
+            os.unlink(REQUEST)
+    data = json.loads(raw)
+    password = data.get("password") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("user") != USER:
+        raise ValueError("only the pi account can be changed")
+    if not isinstance(password, str) or not 8 <= len(password) <= 128 or re.search(r"[\x00-\x1f\x7f]", password):
+        raise ValueError("the password needs 8 to 128 characters without control characters")
+    subprocess.run(["chpasswd"], input=f"{USER}:{password}\n", text=True, check=True, capture_output=True,
+                   timeout=30)
+    return {"state": "done", "detail": "", "time": time.time()}
+
+
+def main():
+    try:
+        last = apply_request()
+    except Exception as exc:   # any problem is reported, never left unanswered
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
+        last = {"state": "failed", "detail": detail[:200], "time": time.time()}
+    try:
+        with open(STATUS, encoding="utf-8") as f:
+            previous = json.load(f)
+    except (OSError, ValueError):
+        previous = {}
+    status = {"pi_default_password": default_password(),
+              "last": last if last is not None else previous.get("last")}
+    tmp = STATUS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(status, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATUS)
+
+
+if __name__ == "__main__":
+    main()

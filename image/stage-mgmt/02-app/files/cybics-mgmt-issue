@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""
+Show how to reach CybICS-mgmt on the console login screen (HDMI).
+Run by cybics-mgmt-issue.service once the containers are up.
+"""
+import json
+import os
+import re
+
+AP_PROFILE = "/etc/NetworkManager/system-connections/cybics-mgmt-ap.nmconnection"
+PROBLEMS_FILE = "/run/cybics-mgmt/config-problems"
+HOST_STATUS = "/run/cybics-mgmt/status.json"
+ISSUE = "/etc/issue.d/cybics-mgmt.issue"
+
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def main():
+    profile = read(AP_PROFILE)
+    ssid = (re.search(r"(?m)^ssid=(.*)$", profile) or [None, "?"])[1]
+    psk = (re.search(r"(?m)^psk=(.*)$", profile) or [None, "?"])[1]
+    admin = "set at the first visit to /admin (if not set yet)"
+    try:
+        pi_default = json.loads(read(HOST_STATUS) or "{}").get("pi_default_password") is True
+    except ValueError:
+        pi_default = False
+    problems = read(PROBLEMS_FILE).strip()
+    text = (
+        "\n  CybICS-mgmt\n"
+        f"  Wi-Fi     {ssid}   password {psk}\n"
+        "  Web       http://10.42.0.1   or   http://cybics-mgmt.local\n"
+        f"  Admin     {admin}\n"
+        "  Settings  cybics-mgmt.txt on the SD card's boot partition\n"
+    )
+    if pi_default:
+        text += "\n  The pi account still has the password raspberry: change it under Passwords.\n"
+    if problems:
+        text += "\n  Problems in cybics-mgmt.txt:\n" + "".join(f"    {p}\n" for p in problems.splitlines())
+    os.makedirs(os.path.dirname(ISSUE), exist_ok=True)
+    with open(ISSUE, "w", encoding="utf-8") as f:
+        f.write(text.replace("\\", "\\\\") + "\n")
+
+
+if __name__ == "__main__":
+    main()

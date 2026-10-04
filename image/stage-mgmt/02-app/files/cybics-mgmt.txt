@@ -1,0 +1,25 @@
+# CybICS-mgmt settings, read at every boot.
+#
+# This file is on the SD card's boot partition, which any computer can open.
+# Edit it there, put the card back and boot the Pi. Lines are KEY=value;
+# lines starting with # are ignored. A value that is not valid is replaced by
+# its default below, and the console login screen says so.
+
+# Wi-Fi access point. CybICS boards look for this network; if you change the
+# name or the password, set the same on the boards' landing pages.
+WIFI_SSID=cybics-mgmt
+# 8 to 63 characters.
+WIFI_PASSWORD=cybics-mgmt
+# Two-letter country code, e.g. DE, AT, CH, GB, US. Wi-Fi stays off without it.
+WIFI_COUNTRY=US
+
+# The password of the web interface is not set here: the first visit to
+# http://10.42.0.1/admin sets it in the browser. Do that before participants
+# join the network, because whoever comes first sets it.
+
+# The enrolment code CybICS boards use to join on their own on this network.
+# It has to match the boards. Empty: boards are not enrolled automatically.
+DEFAULT_ENROL_CODE=CYBICS-BOARDS
+
+# Name shown in the web interface.
+SERVER_NAME=CybICS-mgmt

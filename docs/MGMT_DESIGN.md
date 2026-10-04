@@ -1,12 +1,12 @@
 # CybICS-mgmt design
 
-CybICS-CTF becomes **CybICS-mgmt**: the optional central server for CybICS keeps running CTF events,
+CybICS-CTF became **CybICS-mgmt**: the optional central server for CybICS keeps running CTF events,
 and it also manages the CybICS installations themselves, virtual and physical. This document records
 the analysis behind that step, the decisions taken and the plan. [ARCHITECTURE.md](ARCHITECTURE.md)
-stays the reference for the CTF part; this document adds the fleet part.
+stays the reference for the CTF part and the device identity; this document adds the fleet part.
 
-The findings about CybICS are pinned to CybICS v1.2.4 (October 2026), the first release that ships
-the client.
+The findings about CybICS are from October 2026, from the state of CybICS that becomes the release
+replacing v1.2.4. That release ships `MgmtClient` instead of v1.2.4's CTF-only client.
 
 ## Decisions
 
@@ -14,32 +14,30 @@ the client.
 |---|---|
 | What is managed? | Virtual **and** physical installations. Both can be observed; both can be controlled once the person in charge of the device allows it on the device. |
 | Scope of the first round | Phase 0 (restructure and rename), phase 1 (read-only fleet), phase 2 (commands). Updates and provisioning of images are phase 3. |
-| API | No `/api/v2`. The fleet gets new endpoints under `/api/v1/fleet/`, which the v1 contract allows. The CTF endpoints do not change at all. |
+| Compatibility | None with earlier clients. CybICS-mgmt ships together with the CybICS release that replaces v1.2.4, so no deployed client has to be supported: no compatibility layer for the rename, no second identity. |
+| Identity | The **device** is the only identity. It enrols once and its token authenticates every call. Taking part in an event is a membership of the device in a team (an *instance*), not a second enrolment. |
+| API | `/api/v1` is a fresh contract ([API.md](API.md)), valid from that CybICS release on: one enrolment, one heartbeat, `/ctf/join` for teams. From then on it only grows; anything else needs `/api/v2`. |
 | Repository | Renamed to `mniedermaier/CybICS-mgmt` once the restructure is merged. |
 
-## What exists today
+## What existed before
 
 ### On the server
 
-- Instances exist only as members of a team in an event: `instances.team_id` is `NOT NULL` with
-  `ON DELETE CASCADE`, and so is `teams.event_id`.
-  - A board without an event cannot be represented.
-  - Deleting an event or a team deletes its instances, and with them the board's history.
-  - A physical board has no identity across events, and the organiser sees instances only per
+- CybICS-CTF knew instances only as members of a team in an event, each with its own token:
+  `instances.team_id` was `NOT NULL` with `ON DELETE CASCADE`, and so was `teams.event_id`.
+  - A board without an event could not be represented.
+  - Deleting an event or a team deleted its instances, and with them the board's history.
+  - A physical board had no identity across events, and the organiser saw instances only per
     event.
-- Generic and reusable as they are: admin login, server-side sessions, CSRF, `audit()`, the rate
+- Generic and reusable as they were: admin login, server-side sessions, CSRF, `audit()`, the rate
   limiter, hashed bearer tokens, the heartbeat and its size-capped status payload.
 
-### On the instances
+### On the installations
 
-- CybICS v1.2.4 ships the client (`software/landing/modules/central_ctf.py`,
-  byte-identical to `client/cybics_ctf_client.py`). Each heartbeat already sends:
-  - kind, hostname, version, mode and STM32 UID (at enrolment);
-  - service health and local solves (every 30 s).
-
-  A cross-event fleet overview therefore works **with releases already deployed**.
-- The client ignores unknown fields in answers, so answers can grow. It executes nothing: it "opens
-  no listening port and runs no commands". Control needs a new client release.
+- The CTF client already sent kind, hostname, version, mode and STM32 UID at enrolment, and service
+  health and local solves every 30 s. That is most of what a fleet overview needs.
+- It executed nothing: it "opens no listening port and runs no commands". Control needs a client
+  that verifies jobs, which is why the client changed together with the server.
 - A physical board is **outbound only** on its event uplink: `cybics-ctf-uplink.nft` drops every new
   inbound connection on `ctfwlan0`. Virtual instances sit behind laptop NAT. Management must be pull
   based: the device asks, the server answers.
@@ -74,20 +72,24 @@ Consequences for management:
 ## Target architecture
 
 ```
-                     ┌──────────────────────────── CybICS-mgmt ────────────────────────────┐
- CybICS installation │  fleet                                     ctf                      │
-┌──────────────────┐ │  devices ─ groups ─ enrol codes            events ─ challenges      │
-│ landing          │ │     │                                         └─ teams ─ instances ─┼─ solves
-│  CTFClient   ────┼─┼─────┼──── /api/v1/enroll, /heartbeat, /solves ───────────┘          │
-│  FleetClient ────┼─┼── /api/v1/fleet/enroll, /fleet/heartbeat, /fleet/jobs/<id>          │
-│  job handlers    │ │     └─ jobs (signed, sequenced) ─ job results ─ log bundles          │
-└──────────────────┘ └──────────────────────────────────────────────────────────────────────┘
+ CybICS installation                         CybICS-mgmt
+┌──────────────────┐   /api/v1/enroll        ┌───────────────────────────────────────────────────┐
+│ landing          │   /api/v1/heartbeat     │ devices ─┬─ group, enrolment code                 │
+│  MgmtClient ─────┼───────────────────────► │          ├─ jobs (signed, sequenced), log bundles │
+│  job handlers    │   /api/v1/ctf/join      │          └─ instances ── teams ── events          │
+└──────────────────┘   /api/v1/solves        │               (one live)    │       └─ challenges │
+                                             │                             └─ solves             │
+                                             └───────────────────────────────────────────────────┘
 ```
+
+One enrolment makes the installation a device. Its token authenticates the heartbeat, which carries
+the status, the management settings and job results, and answers with jobs and the device's CTF
+state. Joining a team, reporting solves and reading the catalog use the same token.
 
 ### Devices
 
-A **device** is one CybICS installation: a virtual stack on one laptop, or one board. It is the
-lasting identity in the fleet.
+A **device** is one CybICS installation: a virtual stack on one laptop, or one board. It is the only
+identity on the server.
 
 - Columns: internal id (uuid), token hash, label (the sticker on the board), group, kind, STM32
   UID, hostname, versions, the last status, the actions the device allows, enrolment time, last seen,
@@ -95,17 +97,26 @@ lasting identity in the fleet.
 - A device is never deleted, only retired, so its history and its jobs stay on record.
 - The STM32 UID is shown and used to *suggest* that two devices are the same board. It never
   authenticates and is never acted on automatically (it is broadcast in the SSID).
-- CTF participation stays the `instances` row it is today, linked to its device through a new
-  nullable `instances.device_id`. Deleting a team or an event removes the participation, not the
-  device.
-- v1 enrolments of deployed clients get a device too. Such a device is marked `legacy`: it shows up
-  in the fleet with its telemetry, and offers no actions.
+- CTF participation is an `instances` row: the device's membership in a team (`instances.device_id`
+  is `NOT NULL`). A device has at most one live instance; joining another team ends the previous
+  one. Deleting a team or an event removes the participation, not the device.
+- The device joins a team with the team's name and password (`POST /api/v1/ctf/join`), or the
+  organiser puts it into a team from its fleet page without the password
+  (`instances.joined_by = 'organiser'`). The client learns that from the `ctf` part of its next
+  heartbeat answer. The organiser can also take the device out of its event there.
+- Retiring a device, by the organiser or because the user disconnected it, ends its instance.
+  Bringing a retired device back does not rejoin the event.
 
-### Enrolment into the fleet
+### Enrolment
 
 - **Enrolment codes**: the organiser creates codes in the fleet UI, each with a default group, and
-  can disable them. An event join code also works as an enrolment code, so participants type one
-  code for both.
+  can disable them. The join code of an event that is not finished also works as an enrolment code
+  (without a group), so participants need only the one code they were given: they connect with it,
+  then join a team with it.
+- **The default network**: the Raspberry Pi image hosts `cybics-mgmt` and creates the enrolment
+  code `CYBICS-BOARDS` (`MGMT_DEFAULT_ENROL_CODE`). CybICS boards whose USB dongle is on that network
+  enrol with it on their own (CYBICS_INTEGRATION.md, "The default network"). The organiser disables
+  the code to stop it; a restart never enables it again.
 - **Provisioning file** for boards: a `cybics-mgmt.json` on the SD card's boot partition with the
   server URL, an enrolment code, a label and the allowed actions. A freshly flashed board enrols at
   first boot. Writing that file is the explicit opt-in the invariant "no network call until the user
@@ -117,7 +128,7 @@ lasting identity in the fleet.
 
 ### Telemetry
 
-The fleet heartbeat carries a status object, capped like today (16 KB, depth 8):
+The heartbeat carries a status object, capped at 16 KB and a nesting depth of 8:
 
 - host: CPU, memory, disk, uptime, CPU temperature, throttling;
 - services: state, health and memory per container;
@@ -126,7 +137,8 @@ The fleet heartbeat carries a status object, capped like today (16 KB, depth 8):
 - client: version, allowed actions, results of finished jobs.
 
 The server keeps the last status per device, plus a few typed columns for the list view. Values are
-clamped and rendered through the same filters as today, so no device input can cause a 500.
+clamped (`device_input.py`) and rendered through the same filters as the rest of the UI, so no
+device input can cause a 500.
 
 ### Jobs
 
@@ -134,12 +146,11 @@ A job is one allow-listed action for one device:
 
 | Action | Effect on the device | Parameters |
 |---|---|---|
-| `identify` | Shows a banner "this is &lt;label&gt;" on landing for a while. | label, seconds |
+| `identify` | Shows a banner "this is &lt;label&gt;" on landing for a while. | seconds |
 | `message` | Shows an organiser message on landing. | text |
 | `restart` | Restarts one CybICS service or the whole compose project (`utils/restart.py`). | service or `all` |
 | `reset_progress` | Clears the local CTF progress (`/ctf/reset`). | none |
 | `collect_logs` | Uploads a log bundle (container logs, image tags), at most 256 KB compressed. | none |
-| `ctf_assign` | Joins or leaves a CTF event with a server-issued v1 instance token. | event, token or `leave` |
 
 Rules:
 
@@ -162,24 +173,31 @@ Rules:
   reported as done after the restart.
 - **Audited.** Creating, cancelling and finishing a job is in `admin_log`. The device keeps its own
   log of executed jobs, visible on the landing page.
-- Nothing a job carries is valid beyond the device: no shared passwords, no event-wide secrets.
+- Nothing a job carries is valid beyond the device: no tokens, no shared passwords, no event-wide
+  secrets. Putting a device into a team therefore is not a job: the organiser changes the membership
+  on the server, and the device follows its heartbeat answer.
 
 ### Client
 
 - `client/cybics_mgmt_client.py` stays one file, standard library only, Python 3.9 or later. It
-  holds `CTFClient` with its current behaviour and API, and the new `FleetClient`.
-- `FleetClient` transports and verifies. It never executes anything itself: landing registers a
-  handler per action, and the client calls only those, catching every error.
-- The invariants of the CTF client apply unchanged: no network call before enrolment, nothing ever
-  blocks or crashes landing, answers for a token that is no longer current are discarded.
-- CybICS vendors the file as `software/landing/modules/cybics_mgmt.py`, replacing `central_ctf.py`.
+  holds one class, `MgmtClient`: `enroll(url, code, label)`, `join_event(join_code, team, password)`,
+  `leave_event()`, `leave()`, `set_allowed(actions)`, `report_solve(cid, flag)`, `snapshot()`,
+  `test_connection(url)`, `start()` and `stop()`.
+- It transports and verifies. It never executes anything itself: landing registers a handler per
+  action, and the client calls only those, catching every error.
+- The rules of the CTF sync are those of [ARCHITECTURE.md](ARCHITECTURE.md#sync-protocol): no
+  network call before enrolment, nothing ever blocks or crashes landing, solves are queued through
+  outages and while the device is out of its event, and answers for a token or an instance that is
+  no longer current are discarded.
+- CybICS vendors the file as `software/landing/modules/cybics_mgmt.py`.
 
 ### Admin UI
 
 - Top-level navigation: **Fleet**, **Events**.
 - Fleet list: label, kind, version (marked when older than the newest version in the fleet), online
-  state, health, group, CTF assignment, allowed actions. Filters by group, kind and state.
-- Device page: the last status, the job history, the actions it allows, retire.
+  state, health, group, CTF team, allowed actions. Filters by group, kind and state.
+- Device page: the last status, the job history, the actions it allows, its CTF participations
+  with a form to put it into a team or take it out of its event, retire.
 - Bulk actions on a selection or a group, for example "restart landing on every board of room 2".
 - Enrolment codes, groups, the signing key's fingerprint.
 
@@ -187,39 +205,32 @@ Rules:
 
 Status: implemented.
 
-The rename must not break deployed CybICS releases or existing installations.
-
-| Item | Today | After | Compatibility |
-|---|---|---|---|
-| Python package | `cybics_ctf` | `cybics_mgmt`, with `ctf/` and `fleet/` subpackages | A `cybics_ctf` shim keeps `flask --app cybics_ctf` working. |
-| `/api/v1/info` | `"service": "cybics-ctf"` | unchanged, plus `"product": "cybics-mgmt"` and `"features"` | Deployed clients check `service`; it never changes in v1. |
-| Environment | `CTF_*` | `MGMT_*` | `CTF_*` is still read when the `MGMT_*` name is unset, with a warning. |
-| Database file | `cybics-ctf.sqlite` | `cybics-mgmt.sqlite` | Renamed once at start, with its `-wal` and `-shm`, under the migration lock. |
-| Backups | `cybics-ctf-*.sqlite` | `cybics-mgmt-*.sqlite` | `--keep` prunes both prefixes. |
-| Compose | project from the directory, service `ctf-server`, volume `ctf-data` | `name: cybics-mgmt`, service `server`, volume `data` | The volume name changes. The README gives the one-off command that copies the old volume. |
-| Theme storage | `cybics-ctf-theme` | `cybics-mgmt-theme` | The old key is read when the new one is missing. |
-| Client file | `client/cybics_ctf_client.py` | `client/cybics_mgmt_client.py` | Deployed CybICS keeps its own copy until it vendors the new file. |
-| Display name | "CybICS CTF" | "CybICS-mgmt" | Configurable as before. |
-
-Docs, CLAUDE.md, CI and the README badges move with it.
+The Python package became `cybics_mgmt` with `ctf/` and `fleet/` subpackages, the settings `MGMT_*`,
+the database `cybics-mgmt.sqlite`, the Compose project `cybics-mgmt` with the service `server` and
+the volume `data`, and the client `client/cybics_mgmt_client.py`. `/api/v1/info` answers
+`"service": "cybics-mgmt"`. Because CybICS-mgmt ships with the CybICS release that replaces v1.2.4,
+nothing of the old names is kept: existing CybICS-CTF databases are not migrated.
 
 ## Phase 1: read-only fleet
 
-Status: implemented. The enrolment answer gains the signing key in phase 2.
+Status: implemented.
 
-- Migration: `devices`, `device_groups`, `enrol_codes`, `instances.device_id`; a device for every
-  existing instance (`legacy`).
-- v1 enrolment creates or links the device; the v1 heartbeat updates its status.
-- `/api/v1/fleet/enroll` and `/api/v1/fleet/heartbeat` for the new client.
-- Fleet UI: list, device page, groups, codes, retire.
-- No CybICS change is needed for the legacy view.
+- Schema: `devices`, `device_groups`, `enrol_codes`; every instance belongs to a device.
+- `POST /api/v1/enroll` creates the device; `POST /api/v1/heartbeat` stores its status.
+- Fleet UI: list, device page, groups, codes, retire, putting a device into a team.
 
 ## Phase 2: commands
 
-- Migration: `jobs` and `job_logs`.
+Status: implemented on the server and in the client; the landing side is specified in
+[CYBICS_INTEGRATION.md](CYBICS_INTEGRATION.md#1-landing-service-virtual-and-physical) and still to
+be done in CybICS. There is no `ctf_assign` action: with the device as the only identity, the
+organiser puts a device into a team on the server, and the heartbeat answer carries it to the device.
+No token or password ever travels in a job.
+
+- Schema: `jobs` and `job_logs`.
 - Signing key, job creation (single and bulk), delivery in the heartbeat answer, results,
   `collect_logs` upload with its own nginx location and size limit, expiry.
-- `FleetClient` with signature check, sequence, local policy and handler dispatch.
+- `MgmtClient` with signature check, sequence, local policy and handler dispatch.
 - CybICS: vendor the client, management settings on the landing page (enrol, actions on or off,
   executed jobs, key fingerprint), the handlers, the extended telemetry, the provisioning file.
 
@@ -239,7 +250,13 @@ Status: implemented. The enrolment answer gains the signing key in phase 2.
   command.
 - **Device input is display data.** It is clamped, never trusted, and never decides anything for
   another device.
+- **The device is the only identity.** Every instance belongs to a device; a device has at most one
+  live instance, and retiring it ends that instance.
 - **Devices are retired, never deleted**, and deleting an event or a team leaves the device.
+- **A board UID never acts across teams.** A board joining a team in which its UID is live replaces
+  that instance, only within the team.
 - **Every job is audited** on the server and on the device.
 - **CybICS still works without the server**, and a device with management switched on behaves
   exactly like one without as long as no job arrives.
+- **A board enrols on its own only on the default network `cybics-mgmt`**, with the default code,
+  and never again after the user disconnected it. Enrolling allows no action and joins no event.

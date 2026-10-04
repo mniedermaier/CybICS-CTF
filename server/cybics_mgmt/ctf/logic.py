@@ -1,5 +1,6 @@
 """
-Domain logic: events, the challenge catalog, teams, instances, solves, scoring.
+Domain logic: events, the challenge catalog, teams, instances (a device's
+participation in an event), solves, scoring.
 
 Kept free of request handling so the API, the admin UI and the CLI share it.
 Every function takes the connection explicitly.
@@ -11,12 +12,10 @@ import re
 import unicodedata
 import uuid
 
-from .. import device_input
 from ..db import now, transaction
 from ..device_input import encodable as _encodable
 from ..errors import MgmtError
-from ..fleet import logic as fleet
-from ..security import flag_matches, hash_flag, hash_password, hash_token, new_join_code, new_token, verify_password
+from ..security import flag_matches, hash_flag, hash_password, new_join_code, verify_password
 
 EVENT_STATES = ("draft", "running", "paused", "finished")
 # Allowed state changes. Nothing goes back to draft once started, so a click
@@ -313,6 +312,8 @@ def update_challenge(db, event_id, challenge_id, points, enabled):
 
 
 # ---------- teams and instances ----------
+# An instance is a device's membership in a team. The device itself, and its
+# token, belong to the fleet (fleet/logic.py).
 
 def _validate_team_name(name):
     name = unicodedata.normalize("NFC", " ".join(name.split()))
@@ -357,22 +358,60 @@ def _check_lookalike(db, event_id, name):
                            f"Too similar to the existing team '{row['name']}'. Pick another name.", 409)
 
 
-def _validate_instance(info):
-    return device_input.device_info(info, lambda message: CTFError("invalid_instance", message))
+def _cheap_refusals(db, team, device):
+    """Refusals that cost nothing, checked before any password is hashed."""
+    if team["banned"]:
+        raise CTFError("team_banned", "This team has been disqualified.", 403)
+    live = db.execute("SELECT COUNT(*) FROM instances WHERE team_id = ? AND revoked = 0 AND device_id != ?",
+                      (team["id"], device["id"])).fetchone()[0]
+    # A board joining again with a UID already live in the team replaces that
+    # instance (an SD card reflash makes a new device), so it does not add one.
+    replaces = device["device_uid"] and db.execute(
+        """SELECT 1 FROM instances i JOIN devices d ON d.id = i.device_id
+           WHERE i.team_id = ? AND i.revoked = 0 AND d.device_uid = ?""",
+        (team["id"], device["device_uid"])).fetchone()
+    if live >= MAX_INSTANCES_PER_TEAM and not replaces:
+        raise CTFError("too_many_instances",
+                       f"This team already has {live} active devices. Leave on an unused one first, "
+                       "or ask the organiser to revoke old ones.", 409)
+    recent = db.execute("SELECT COUNT(*) FROM instances WHERE team_id = ? AND joined_at > ?",
+                        (team["id"], now() - 3600)).fetchone()[0]
+    if recent >= MAX_NEW_INSTANCES_PER_HOUR:
+        raise CTFError("too_many_instances",
+                       "This team had too many devices join in the last hour. Try again later.", 429)
 
 
-def enroll(db, join_code, team_name, team_password, instance_info, remote_addr, device_id=None):
+def _add_instance(db, team, device, joined_by):
     """
-    Register an instance with a team, creating the team on first use.
+    Make the device a member of the team (call inside a transaction). Returns
+    (instance_id, uid_teams). A device has one live instance: any other one
+    ends here. A board joining a team its UID is already live in replaces
+    that registration too (an SD card reflash makes a new device). Only
+    within the team: the UID is broadcast in the board's SSID, so anyone can
+    claim it, and it must never let one team knock another team's board
+    offline. uid_teams lists other teams of the event with a live instance
+    claiming the same UID; the caller logs it, and the admin UI flags it.
+    """
+    db.execute("UPDATE instances SET revoked = 1 WHERE device_id = ? AND revoked = 0", (device["id"],))
+    uid_teams = []
+    if device["device_uid"]:
+        db.execute("""UPDATE instances SET revoked = 1 WHERE team_id = ? AND revoked = 0 AND device_id IN
+                          (SELECT id FROM devices WHERE device_uid = ?)""", (team["id"], device["device_uid"]))
+        uid_teams = [r["name"] for r in db.execute("""
+            SELECT DISTINCT t.name FROM instances i JOIN teams t ON t.id = i.team_id
+            JOIN devices d ON d.id = i.device_id
+            WHERE d.device_uid = ? AND i.revoked = 0 AND t.event_id = ? AND t.id != ?""",
+                                                  (device["device_uid"], team["event_id"], team["id"]))]
+    instance_id = str(uuid.uuid4())
+    db.execute("INSERT INTO instances (id, team_id, device_id, joined_by, joined_at) VALUES (?, ?, ?, ?, ?)",
+               (instance_id, team["id"], device["id"], joined_by, now()))
+    return instance_id, uid_teams
 
-    Returns (instance_id, token, event, team, uid_teams). The token is shown
-    exactly once; only its hash is stored. uid_teams lists other teams with a
-    live instance claiming the same board UID; the caller logs it, and the
-    admin UI flags it.
 
-    device_id links the instance to a fleet device the caller authenticated.
-    Without one, the instance gets a legacy device of its own: a board
-    re-enrolling in its team keeps the device of the instance it replaces.
+def join(db, device, join_code, team_name, team_password):
+    """
+    A device joins a team of the event with this join code, creating the team
+    on first use. Returns (instance_id, event, team, uid_teams).
     """
     event = get_event_by_join_code(db, join_code)
     if event is None:
@@ -383,7 +422,6 @@ def enroll(db, join_code, team_name, team_password, instance_info, remote_addr, 
     team_password = _text(team_password, "team_password")
     if len(team_password) > 128:
         raise CTFError("invalid_team_password", "Team password must be at most 128 characters.")
-    info = _validate_instance(instance_info if instance_info is not None else {})
 
     def wrong_password(team):
         failed = CTFError("wrong_team_password", "Wrong password for this team.", 403)
@@ -391,40 +429,23 @@ def enroll(db, join_code, team_name, team_password, instance_info, remote_addr, 
         return failed
 
     # Password hashing is slow by design; do it before taking the write lock,
-    # so enrolments (and guessing attempts) never stall heartbeats and solves.
+    # so joins (and guessing attempts) never stall heartbeats and solves.
     existing = db.execute("SELECT * FROM teams WHERE event_id = ? AND name = ?",
                           (event["id"], team_name)).fetchone()
+    new_hash = None
     if existing is not None:
         # Cheap refusals first: a disqualified team, or one at its instance
         # cap, must not be able to make the server hash anything.
-        if existing["banned"]:
-            raise CTFError("team_banned", "This team has been disqualified.", 403)
-        live = db.execute("SELECT COUNT(*) FROM instances WHERE team_id = ? AND revoked = 0",
-                          (existing["id"],)).fetchone()[0]
-        # A board re-enrolling with a UID already live in the team replaces
-        # that instance, so it does not add one; a new UID does.
-        replaces = info["device_uid"] and db.execute(
-            "SELECT 1 FROM instances WHERE team_id = ? AND device_uid = ? AND revoked = 0",
-            (existing["id"], info["device_uid"])).fetchone()
-        if live >= MAX_INSTANCES_PER_TEAM and not replaces:
-            raise CTFError("too_many_instances",
-                           f"This team already has {live} active instances. Leave on an unused one first, "
-                           "or ask the organiser to revoke old ones.", 409)
-        recent = db.execute("SELECT COUNT(*) FROM instances WHERE team_id = ? AND enrolled_at > ?",
-                            (existing["id"], now() - 3600)).fetchone()[0]
-        if recent >= MAX_NEW_INSTANCES_PER_HOUR:
-            raise CTFError("too_many_instances",
-                           "This team enrolled too many instances in the last hour. Try again later.", 429)
-    new_hash = None
-    if existing is None:
+        _cheap_refusals(db, existing, device)
+        if not verify_password(existing["password_hash"], team_password):
+            raise wrong_password(existing)
+    else:
         if not event["allow_team_registration"]:
             raise CTFError("registration_closed",
                            "Team registration is closed. Ask the organiser to create your team.", 403)
         _check_new_team_password(team_name, team_password)
         _check_lookalike(db, event["id"], team_name)
         new_hash = hash_password(team_password)
-    elif not verify_password(existing["password_hash"], team_password):
-        raise wrong_password(existing)
 
     with transaction(db):
         team = db.execute("SELECT * FROM teams WHERE event_id = ? AND name = ?",
@@ -449,72 +470,42 @@ def enroll(db, join_code, team_name, team_password, instance_info, remote_addr, 
             raise CTFError("busy", "The team changed meanwhile. Try again.", 503)
         if team["banned"]:
             raise CTFError("team_banned", "This team has been disqualified.", 403)
-
-        # A physical board re-enrolling in its team (e.g. after an SD card
-        # reflash) replaces its old registration instead of piling up ghost
-        # instances. Only within the team: the UID is broadcast in the board's
-        # SSID, so anyone can claim it, and it must never let one team knock
-        # another team's board offline.
-        uid_teams = []
-        if info["device_uid"]:
-            replaced = db.execute("""SELECT device_id FROM instances
-                                     WHERE device_uid = ? AND revoked = 0 AND team_id = ?
-                                     ORDER BY enrolled_at DESC LIMIT 1""",
-                                  (info["device_uid"], team["id"])).fetchone()
-            if device_id is None and replaced is not None:
-                device_id = fleet.legacy_device_for(db, replaced["device_id"])
-            db.execute("""UPDATE instances SET revoked = 1
-                          WHERE device_uid = ? AND revoked = 0 AND team_id = ?""",
-                       (info["device_uid"], team["id"]))
-            uid_teams = [r["name"] for r in db.execute("""
-                SELECT DISTINCT t.name FROM instances i JOIN teams t ON t.id = i.team_id
-                WHERE i.device_uid = ? AND i.revoked = 0 AND t.event_id = ? AND t.id != ?""",
-                                                      (info["device_uid"], event["id"], team["id"]))]
-
-        instance_id = str(uuid.uuid4())
-        token = new_token()
-        ts = now()
-        if device_id is None:
-            device_id = fleet.create_legacy_device(db, instance_id, info, remote_addr)
-        else:
-            fleet.refresh_legacy_device(db, device_id, info, remote_addr)
-        db.execute("""
-            INSERT INTO instances (id, team_id, token_hash, kind, device_uid, hostname,
-                                   cybics_version, mode, remote_addr, enrolled_at, last_seen, device_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                   (instance_id, team["id"], hash_token(token), info["kind"], info["device_uid"],
-                    info["hostname"], info["cybics_version"], info["mode"], remote_addr, ts, ts, device_id))
-    return instance_id, token, event, team, uid_teams
+        instance_id, uid_teams = _add_instance(db, team, device, "device")
+    return instance_id, event, team, uid_teams
 
 
-def authenticate_instance(db, token):
-    """Resolve a bearer token to (instance, team, event), or None."""
-    if not token:
-        return None
-    row = db.execute("""
-        SELECT i.id AS instance_id, i.revoked, i.kind, t.id AS team_id, t.name AS team_name,
-               t.banned, e.id AS event_id
+def assign(db, device, team_id):
+    """
+    The organiser puts a device into a team, no password needed. Returns
+    (instance_id, event, team, uid_teams).
+    """
+    team = db.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+    if team is None:
+        raise CTFError("not_found", "Unknown team.", 404)
+    event = get_event(db, team["event_id"])
+    if event["state"] == "finished":
+        raise CTFError("event_finished", "This event has finished.", 409)
+    if device["retired"]:
+        raise CTFError("device_retired", "This device is retired. Bring it back first.", 409)
+    with transaction(db):
+        _cheap_refusals(db, team, device)
+        instance_id, uid_teams = _add_instance(db, team, device, "organiser")
+    return instance_id, event, team, uid_teams
+
+
+def participation(db, device_id):
+    """The device's live instance with its team and event, or None."""
+    return db.execute("""
+        SELECT i.id AS instance_id, i.device_id, t.id AS team_id, t.name AS team_name, t.banned,
+               e.id AS event_id
         FROM instances i JOIN teams t ON t.id = i.team_id JOIN events e ON e.id = t.event_id
-        WHERE i.token_hash = ?""", (hash_token(token),)).fetchone()
-    if row is None or row["revoked"]:
-        return None
-    return row
+        WHERE i.device_id = ? AND i.revoked = 0
+        ORDER BY i.joined_at DESC LIMIT 1""", (device_id,)).fetchone()
 
 
-def record_heartbeat(db, instance_id, status, remote_addr):
-    """Store the instance's status; a heartbeat without one keeps the previous status."""
-    info, status_json = device_input.clean_status(status)
-    version = device_input.opt_str(info.get("cybics_version"), 32)
-    mode = device_input.opt_str(info.get("mode"), 32)
-    db.execute("""
-        UPDATE instances SET last_seen = ?, remote_addr = ?,
-            status_json = COALESCE(?, status_json),
-            cybics_version = COALESCE(?, cybics_version), mode = COALESCE(?, mode)
-        WHERE id = ?""",
-               (now(), remote_addr, status_json, version, mode, instance_id))
-    row = db.execute("SELECT device_id FROM instances WHERE id = ?", (instance_id,)).fetchone()
-    if row is not None and row["device_id"]:
-        fleet.mirror_legacy_status(db, row["device_id"], status_json, version, mode, remote_addr)
+def leave(db, device_id):
+    """The device leaves its event."""
+    db.execute("UPDATE instances SET revoked = 1 WHERE device_id = ? AND revoked = 0", (device_id,))
 
 
 def revoke_instance(db, instance_id):
@@ -545,8 +536,9 @@ def create_team(db, event_id, name, password):
         if db.execute("SELECT 1 FROM teams WHERE event_id = ? AND name = ?", (event_id, name)).fetchone():
             raise CTFError("team_exists", f"Team '{name}' already exists.", 409)
         _check_lookalike(db, event_id, name)
-        db.execute("INSERT INTO teams (event_id, name, password_hash, created_at) VALUES (?, ?, ?, ?)",
-                   (event_id, name, password_hash, now()))
+        cur = db.execute("INSERT INTO teams (event_id, name, password_hash, created_at) VALUES (?, ?, ?, ?)",
+                         (event_id, name, password_hash, now()))
+    return db.execute("SELECT * FROM teams WHERE id = ?", (cur.lastrowid,)).fetchone()
 
 
 def set_team_password(db, team_id, password):
@@ -560,11 +552,12 @@ def set_team_password(db, team_id, password):
 
 def submit_solve(db, auth, challenge_key, flag, client_time, remote_addr):
     """
-    Record a solve reported by an instance. Returns (result, points).
+    Record a solve a device reports for its team. Returns (result, points,
+    first blood bonus).
 
     Every call lands in the submissions audit log. The score uses the server's
-    receive time; the instance's clock is kept for information only, since an
-    instance controls it.
+    receive time; the device's clock is kept for information only, since its
+    owner controls it.
     """
     challenge_key = _text(challenge_key, "challenge_id")[:64]
     flag = _text(flag, "flag")[:256]
@@ -596,20 +589,21 @@ def submit_solve(db, auth, challenge_key, flag, client_time, remote_addr):
                     (challenge["id"], cur.lastrowid)).fetchone():
                 bonus = first_blood_points(points, event["first_blood_bonus"])
         db.execute("""
-            INSERT INTO submissions (event_id, team_id, team_name, instance_id, challenge_key,
+            INSERT INTO submissions (event_id, team_id, team_name, instance_id, device_id, challenge_key,
                                      result, remote_addr, received_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                   (event["id"], auth["team_id"], auth["team_name"], auth["instance_id"],
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (event["id"], auth["team_id"], auth["team_name"], auth["instance_id"], auth["device_id"],
                     challenge_key, result, remote_addr, now()))
     return result, points, bonus
 
 
-def record_failed_enrolment(db, event_id, team_id, team_name, remote_addr):
+def record_failed_join(db, event_id, team_id, team_name, device_id, remote_addr):
     """A wrong team password goes to the audit log: repeated ones are a brute-force attempt."""
     db.execute("""
-        INSERT INTO submissions (event_id, team_id, team_name, challenge_key, result, remote_addr, received_at)
-        VALUES (?, ?, ?, '(enrolment)', 'wrong_team_password', ?, ?)""",
-               (event_id, team_id, team_name, remote_addr, now()))
+        INSERT INTO submissions (event_id, team_id, team_name, device_id, challenge_key, result, remote_addr,
+                                 received_at)
+        VALUES (?, ?, ?, ?, '(join)', 'wrong_team_password', ?, ?)""",
+               (event_id, team_id, team_name, device_id, remote_addr, now()))
 
 
 def team_solved_keys(db, team_id):
@@ -679,7 +673,7 @@ def recent_solves(db, event_id, limit=20, moderation=False, team_id=None, offset
     """
     return db.execute("""
         SELECT s.id, s.received_at, s.client_time, s.voided, t.name AS team, t.id AS team_id,
-               t.banned, c.key, c.title, c.points, i.kind, i.id AS instance_id, e.first_blood_bonus,
+               t.banned, c.key, c.title, c.points, d.kind, i.id AS instance_id, i.device_id, e.first_blood_bonus,
                s.voided = 0 AND t.banned = 0 AND s.received_at = (
                    SELECT MIN(s2.received_at) FROM solves s2 JOIN teams t2 ON t2.id = s2.team_id
                    WHERE s2.challenge_id = s.challenge_id AND s2.voided = 0 AND t2.banned = 0
@@ -688,6 +682,7 @@ def recent_solves(db, event_id, limit=20, moderation=False, team_id=None, offset
         JOIN challenges c ON c.id = s.challenge_id
         JOIN events e ON e.id = t.event_id
         LEFT JOIN instances i ON i.id = s.instance_id
+        LEFT JOIN devices d ON d.id = i.device_id
         WHERE t.event_id = :event AND (:moderation OR (t.banned = 0 AND s.voided = 0))
           AND (:team IS NULL OR t.id = :team)
         ORDER BY s.received_at DESC LIMIT :limit OFFSET :offset""",

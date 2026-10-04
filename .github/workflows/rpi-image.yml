@@ -1,0 +1,165 @@
+name: Raspberry Pi image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # A pull request that changes the image builds it, so a broken image shows
+  # before a release, not on the release.
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'image/**'
+      - '.github/workflows/rpi-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build SD card image
+    # Native arm64: pi-gen and the containers build without qemu.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+          df -h
+
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Check the tag against the version
+        # A release v1.2.3 must contain server version 1.2.3; bump __version__ first.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' server/cybics_mgmt/__init__.py)"
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ $VERSION in server/cybics_mgmt/__init__.py"
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        run: image/build.sh
+
+      - name: Verify the artefact
+        id: artefact
+        working-directory: image/deploy
+        run: |
+          set -euo pipefail
+          IMG="$(find . -maxdepth 1 -name '*.img.xz' -print -quit)"
+          if [ -z "$IMG" ]; then
+            echo "::error::build.sh produced no .img.xz"
+            exit 1
+          fi
+          BYTES="$(stat -c%s "$IMG")"
+          echo "Built $IMG ($((BYTES / 1024 / 1024)) MB)"
+          # GitHub caps a release asset at 2 GiB.
+          if [ "$BYTES" -ge 2147483648 ]; then
+            echo "::error::Image is $((BYTES / 1024 / 1024)) MB, at or above the 2 GiB release asset limit"
+            exit 1
+          fi
+          sha256sum "$(basename "$IMG")" > "$(basename "$IMG").sha256"
+          {
+            echo "path=image/deploy/$(basename "$IMG")"
+            echo "name=$(basename "$IMG")"
+            echo "mb=$((BYTES / 1024 / 1024))"
+            echo "sha256=$(cut -d' ' -f1 "$(basename "$IMG").sha256")"
+          } >> "$GITHUB_OUTPUT"
+
+      # Uploaded as they are, not zipped: the download is the .img.xz itself,
+      # ready for Raspberry Pi Imager or xzcat | dd.
+      - name: Upload the image as workflow artefact
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.artefact.outputs.path }}
+          archive: false
+          retention-days: 14
+
+      - name: Upload its checksum as workflow artefact
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.artefact.outputs.path }}.sha256
+          archive: false
+          retention-days: 14
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          IMG: ${{ steps.artefact.outputs.path }}
+          IMG_NAME: ${{ steps.artefact.outputs.name }}
+          IMG_MB: ${{ steps.artefact.outputs.mb }}
+          IMG_SHA: ${{ steps.artefact.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          NOTES="$(mktemp)"
+          cat > "$NOTES" <<NOTE
+          ## CybICS-mgmt Raspberry Pi image
+
+          \`$IMG_NAME\` ($IMG_MB MB compressed). One 64-bit image for the Raspberry Pi 3, 4, 5 and
+          Zero 2 W: Raspberry Pi OS Lite with the CybICS-mgmt server pre-loaded and a Wi-Fi access
+          point that CybICS boards join on their own.
+
+          SHA-256: \`$IMG_SHA\` (also in \`$IMG_NAME.sha256\`; check with \`sha256sum -c\`).
+
+          Without the Raspberry Pi: \`git clone\` this tag and run \`docker compose up -d --build\`
+          (README, Quick Start).
+
+          ### Writing it to an SD card
+
+          Identify the card first; \`dd\` overwrites whatever you point it at:
+
+          \`\`\`
+          lsblk -dpno NAME,SIZE,MODEL
+          xzcat $IMG_NAME | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
+          sync && sudo eject /dev/sdX
+          \`\`\`
+
+          Raspberry Pi Imager also takes the \`.img.xz\` under "Use custom".
+
+          ### Settings before the first boot
+
+          The SD card's boot partition shows up on any computer. Edit \`cybics-mgmt.txt\` there:
+          Wi-Fi name, password and country, and the enrolment code the boards use.
+          **Change the Wi-Fi password** (default \`cybics-mgmt\`) and set your country.
+
+          ### Connecting
+
+          - Wi-Fi \`cybics-mgmt\`, password \`cybics-mgmt\` (unless changed).
+          - Web interface: \`http://10.42.0.1\` or \`http://cybics-mgmt.local\`.
+          - The first visit to \`http://10.42.0.1/admin\` sets the admin password; do it before
+            participants join the network.
+          - SSH: \`pi\` / \`raspberry\`. **Change it** under *Passwords* in the web interface.
+
+          The first boot loads the containers and takes a few minutes; later boots take seconds.
+          NOTE
+
+          # A release written by hand before the tag build keeps its text; the
+          # image and its checksum are added. Otherwise the notes above go first,
+          # then GitHub's list of the pull requests merged since the last tag.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$IMG" "$IMG.sha256" --clobber
+            gh release view "$TAG" --json body -q .body > /tmp/existing || true
+            if [ ! -s /tmp/existing ]; then
+              gh release edit "$TAG" --notes-file "$NOTES"
+            fi
+          else
+            gh release create "$TAG" "$IMG" "$IMG.sha256" --title "CybICS-mgmt $TAG" \
+              --notes-file "$NOTES" --generate-notes
+          fi
