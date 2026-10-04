@@ -253,15 +253,15 @@ def test_admin_actions_are_logged(admin, event, caplog):
 
 # ---------- configuration and storage ----------
 
-def test_generated_secrets_are_private_and_stable(tmp_path, monkeypatch):
+def test_generated_secret_key_is_private_and_stable(tmp_path, monkeypatch):
     monkeypatch.delenv("MGMT_ADMIN_PASSWORD", raising=False)
     monkeypatch.delenv("MGMT_SECRET_KEY", raising=False)
     first = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite")})
     second = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite")})
-    assert first.config["ADMIN_PASSWORD"] == second.config["ADMIN_PASSWORD"]
     assert first.config["SECRET_KEY"] == second.config["SECRET_KEY"]
-    for name in ("admin_password", "secret_key"):
-        assert (tmp_path / name).stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "secret_key").stat().st_mode & 0o777 == 0o600
+    assert first.config["ADMIN_PASSWORD"] == ""               # set in the browser instead
+    assert not (tmp_path / "admin_password").exists()
 
 
 def test_deleting_a_team_keeps_its_submissions(tmp_path):
@@ -450,18 +450,6 @@ def test_rate_limiter_forgets_idle_keys():
 
 
 # ---------- review round 3 ----------
-
-@pytest.mark.parametrize("content", ["", "   \n", "short"])
-def test_unusable_admin_password_file_is_replaced(tmp_path, monkeypatch, content):
-    monkeypatch.delenv("MGMT_ADMIN_PASSWORD", raising=False)
-    (tmp_path / "admin_password").write_text(content)
-    app = create_app({"DATA_DIR": str(tmp_path), "DATABASE": str(tmp_path / "db.sqlite")})
-    assert len(app.config["ADMIN_PASSWORD"]) >= 16
-    assert (tmp_path / "admin_password").read_text().strip() == app.config["ADMIN_PASSWORD"]
-    from conftest import login
-    assert login(app.test_client(), "").status_code == 200        # no way in with an empty password
-    assert login(app.test_client(), content).status_code == 200
-
 
 def test_short_admin_password_from_env_is_refused(tmp_path, monkeypatch):
     monkeypatch.setenv("MGMT_ADMIN_PASSWORD", "abc")

@@ -100,6 +100,16 @@ def _ensure_default_code(app):
         conn.close()
 
 
+def _report_admin_setup(app):
+    conn = db.connect(app.config["DATABASE"])
+    try:
+        unset = conn.execute("SELECT 1 FROM admin_credentials WHERE id = 1").fetchone() is None
+    finally:
+        conn.close()
+    if unset:
+        log.warning("no admin password yet: the first visit to /admin sets it")
+
+
 def create_app(test_config=None):
     _configure_logging()
     app = Flask(__name__)
@@ -131,6 +141,9 @@ def create_app(test_config=None):
         # An enrolment code created at start if missing: the code CybICS
         # boards use to enrol on their own on the default network.
         DEFAULT_ENROL_CODE=(env("DEFAULT_ENROL_CODE") or "").strip(),
+        # The Raspberry Pi image mounts a directory here for requests to the
+        # host (setting the pi account's password); see host.py.
+        HOST_DIR=(env("HOST_DIR") or "").strip(),
         # Requests with an unknown or revoked token, per address. Valid tokens
         # are never limited by this.
         RATE_LIMIT_BAD_TOKEN=(60, 60),
@@ -158,11 +171,8 @@ def create_app(test_config=None):
                                    "(set MGMT_ALLOW_WEAK_ADMIN_PASSWORD=1 for a local test setup).")
             log.warning("MGMT_ALLOW_WEAK_ADMIN_PASSWORD=1: the admin password is shorter than 8 characters. "
                         "Never run an event like this.")
-        if not password:
-            password, created = _persistent_secret(app.config["DATA_DIR"], "admin_password")
-            if created:
-                log.warning("MGMT_ADMIN_PASSWORD not set; generated an admin password in %s/admin_password",
-                            app.config["DATA_DIR"])
+        # Empty: the first visit to /admin sets the password in the browser
+        # (security.admin_setup_needed); it is then stored as a hash.
         app.config["ADMIN_PASSWORD"] = password
 
     # Behind a reverse proxy (Caddy/nginx/Traefik), take the client address
@@ -185,6 +195,8 @@ def create_app(test_config=None):
     db.init_app(app)
     if app.config.get("DEFAULT_ENROL_CODE"):
         _ensure_default_code(app)
+    if not app.config["ADMIN_PASSWORD"]:
+        _report_admin_setup(app)
     app.register_blueprint(api.bp)
     app.register_blueprint(admin.bp)
     app.register_blueprint(public.bp)

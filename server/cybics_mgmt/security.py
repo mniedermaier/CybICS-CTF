@@ -160,11 +160,48 @@ class TrustedProxyFix:
 
 # ---------- admin session ----------
 
+ADMIN_PASSWORD_MIN = 8
+
+
+def admin_password_hash():
+    """The admin password's hash from the database (set in the browser), or None."""
+    from .db import get_db
+    row = get_db().execute("SELECT password_hash FROM admin_credentials WHERE id = 1").fetchone()
+    return row["password_hash"] if row else None
+
+
+def admin_setup_needed():
+    """True until an admin password exists: from MGMT_ADMIN_PASSWORD, or set at the first visit."""
+    return not current_app.config.get("ADMIN_PASSWORD") and admin_password_hash() is None
+
+
 def check_admin_password(password):
-    expected = current_app.config.get("ADMIN_PASSWORD") or ""
-    if not expected or not password:   # never let an empty password match an empty one
+    if not password:   # never let an empty password match anything
         return False
-    return hmac.compare_digest(password.encode(), expected.encode())
+    expected = current_app.config.get("ADMIN_PASSWORD") or ""
+    if expected:
+        return hmac.compare_digest(password.encode(), expected.encode())
+    stored = admin_password_hash()
+    return stored is not None and verify_password(stored, password)
+
+
+def set_admin_password(password, first=False):
+    """
+    Store a new admin password (its scrypt hash). With first=True it only
+    succeeds while none is set, so two people setting it at once cannot both
+    win. Returns False if that race was lost. Hashes before taking the lock.
+    """
+    from .db import get_db, now
+    password_hash = hash_password(password)
+    db = get_db()
+    if first:
+        cur = db.execute("INSERT INTO admin_credentials (id, password_hash, set_at) VALUES (1, ?, ?) "
+                         "ON CONFLICT (id) DO NOTHING", (password_hash, now()))
+        return cur.rowcount == 1
+    db.execute("INSERT INTO admin_credentials (id, password_hash, set_at) VALUES (1, ?, ?) "
+               "ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash, set_at = excluded.set_at",
+               (password_hash, now()))
+    return True
 
 
 # scrypt costs ~0.25 s of CPU and a chunk of memory per call. Bound how many
@@ -207,11 +244,12 @@ def _password_fingerprint():
     """
     Ties a session to the current admin password: changing it logs everyone
     out. Derived with scrypt (salted with the secret key), computed once per
-    password and cached, so the password never meets a fast hash.
+    password and cached, so the password never meets a fast hash. A password
+    set in the browser is represented by its stored hash, which changes with it.
     """
     key = current_app.config["SECRET_KEY"]
     key = key.encode() if isinstance(key, str) else key
-    password = current_app.config["ADMIN_PASSWORD"].encode()
+    password = (current_app.config.get("ADMIN_PASSWORD") or admin_password_hash() or "").encode()
     cache_key = (key, password)
     with _fingerprint_lock:
         fingerprint = _fingerprints.get(cache_key)
@@ -244,6 +282,8 @@ def end_admin_session():
 
 def is_admin():
     from .db import get_db
+    if admin_setup_needed():
+        return False
     fingerprint = session.get("admin")
     since = session.get("admin_since") or 0
     sid = session.get("admin_sid")

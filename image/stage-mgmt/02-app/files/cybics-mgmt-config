@@ -15,7 +15,7 @@ import sys
 BOOT_FILE = "/boot/firmware/cybics-mgmt.txt"
 AP_PROFILE = "/etc/NetworkManager/system-connections/cybics-mgmt-ap.nmconnection"
 ENV_FILE = "/opt/cybics-mgmt/.env"
-PROBLEMS_FILE = "/run/cybics-mgmt/config-problems"
+PROBLEMS_FILE = "/run/cybics-mgmt/config-problems"   # the tmpfs request directory, see cybics-mgmt-host
 
 CHECKS = {
     "WIFI_SSID": (lambda v: 1 <= len(v.encode()) <= 32 and v.isprintable(), "1 to 32 characters"),

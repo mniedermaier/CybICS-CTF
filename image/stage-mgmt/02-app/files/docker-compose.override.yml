@@ -1,0 +1,10 @@
+# Raspberry Pi image only (docker compose reads this file next to
+# docker-compose.yml): the server may ask the host to set the pi account's
+# password. /run/cybics-mgmt is a tmpfs owned by the container's user; the
+# root service cybics-mgmt-host applies the requests. See server/cybics_mgmt/host.py.
+services:
+  server:
+    environment:
+      MGMT_HOST_DIR: /host
+    volumes:
+      - /run/cybics-mgmt:/host

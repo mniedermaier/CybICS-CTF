@@ -5,7 +5,7 @@ cat > /etc/systemd/system/cybics-mgmt-config.service <<'UNIT'
 [Unit]
 Description=CybICS-mgmt: apply cybics-mgmt.txt from the boot partition
 DefaultDependencies=no
-After=local-fs.target
+After=local-fs.target systemd-tmpfiles-setup.service
 RequiresMountsFor=/boot/firmware
 Before=NetworkManager.service docker.service cybics-mgmt.service
 
@@ -72,5 +72,33 @@ TimeoutStartSec=180
 WantedBy=multi-user.target
 UNIT
 
+# Requests from the server to the host: applied when they appear, and once
+# at boot to report whether pi still has its default password.
+cat > /etc/systemd/system/cybics-mgmt-host.service <<'UNIT'
+[Unit]
+Description=CybICS-mgmt: apply requests from the server (the pi password)
+After=systemd-tmpfiles-setup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cybics-mgmt-host
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat > /etc/systemd/system/cybics-mgmt-host.path <<'UNIT'
+[Unit]
+Description=CybICS-mgmt: watch for requests from the server
+
+[Path]
+PathExists=/run/cybics-mgmt/pi-password.json
+Unit=cybics-mgmt-host.service
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 systemctl enable cybics-mgmt-config.service cybics-mgmt-first-boot.service cybics-mgmt.service \
-    cybics-mgmt-issue.service
+    cybics-mgmt-issue.service cybics-mgmt-host.service cybics-mgmt-host.path

@@ -146,8 +146,10 @@ cp .env.example .env        # optional: adjust settings
 docker compose up -d --build
 ```
 
-Open **`http://<host>:8000/admin`** and log in. Without `MGMT_ADMIN_PASSWORD`, a password is generated
-on first start; read it with `docker compose exec server cat /data/admin_password`.
+Open **`http://<host>:8000/admin`**. The first visit sets the admin password in the browser, unless
+`MGMT_ADMIN_PASSWORD` is set. Whoever opens it first decides, so do it before anybody else can reach
+the server. Change it later under *Passwords*; if it is lost, `docker compose exec server flask --app
+cybics_mgmt reset-admin-password` lets the next visit set a new one.
 
 ### Your first event
 
@@ -187,7 +189,7 @@ that also hosts the Wi-Fi network. Every release has the SD card image attached
 |---|---|
 | Wi-Fi network | `cybics-mgmt`, password `cybics-mgmt`, 2.4 GHz, channel 6 |
 | Web interface | `http://10.42.0.1` or `http://cybics-mgmt.local` |
-| Admin password | generated at the first start and shown on the console (HDMI) |
+| Admin password | set in the browser at the first visit to `http://10.42.0.1/admin` |
 | Enrolment code for CybICS boards | `CYBICS-BOARDS` |
 | SSH | `pi` / `raspberry` |
 
@@ -197,7 +199,10 @@ that also hosts the Wi-Fi network. Every release has the SD card image attached
    Wi-Fi name, **password** and **country**, the admin password, the boards' enrolment code. It is
    read at every boot, and the console lists any value it could not use.
 3. Boot the Pi. The first boot loads the containers and takes a few minutes.
-4. Join the Wi-Fi with a laptop and open `http://10.42.0.1/admin`.
+4. Join the Wi-Fi with a laptop and open `http://10.42.0.1/admin`. The first visit sets the admin
+   password; do it before participants join the network.
+5. Under *Passwords*, set a new password for the Pi's `pi` account (SSH and console): it starts as
+   `pi` / `raspberry`, and every admin page warns until it is changed.
 
 **The default network.** CybICS boards with a USB Wi-Fi dongle look for `cybics-mgmt`. As soon as it
 is in range they connect and enrol with the code `CYBICS-BOARDS`, and show up in the fleet. If you
@@ -318,7 +323,7 @@ cp .env.example .env
 
 | Variable | Default | |
 |---|---|---|
-| `MGMT_ADMIN_PASSWORD` | generated | At least 8 characters. If unset, generated on first start and kept in `/data/admin_password`. |
+| `MGMT_ADMIN_PASSWORD` | none | At least 8 characters. If unset, the first visit to `/admin` sets the password in the browser (stored as a scrypt hash) and *Passwords* changes it. |
 | `MGMT_ALLOW_WEAK_ADMIN_PASSWORD` | `0` | `1` accepts a shorter admin password, for a local test setup only. Logged as a warning at every start. |
 | `MGMT_SECRET_KEY` | generated | Session key, at least 16 characters. If unset, generated and kept in `/data/secret_key`. |
 | `MGMT_SERVER_NAME` | `CybICS-mgmt` | Shown in the UI and returned by `/api/v1/info`. |

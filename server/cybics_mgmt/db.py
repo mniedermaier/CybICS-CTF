@@ -222,6 +222,15 @@ MIGRATIONS = [
         created_at  REAL    NOT NULL
     );
     """,
+    # 2: the admin password set in the browser at the first visit to /admin,
+    # unless MGMT_ADMIN_PASSWORD is set. One row; scrypt hash only.
+    """
+    CREATE TABLE admin_credentials (
+        id            INTEGER PRIMARY KEY CHECK (id = 1),
+        password_hash TEXT    NOT NULL,
+        set_at        REAL    NOT NULL
+    );
+    """,
 ]
 
 

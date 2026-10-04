@@ -81,13 +81,20 @@ jobs:
             echo "sha256=$(cut -d' ' -f1 "$(basename "$IMG").sha256")"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Upload as workflow artefact
+      # Uploaded as they are, not zipped: the download is the .img.xz itself,
+      # ready for Raspberry Pi Imager or xzcat | dd.
+      - name: Upload the image as workflow artefact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.artefact.outputs.name }}
-          path: |
-            ${{ steps.artefact.outputs.path }}
-            ${{ steps.artefact.outputs.path }}.sha256
+          path: ${{ steps.artefact.outputs.path }}
+          archive: false
+          retention-days: 14
+
+      - name: Upload its checksum as workflow artefact
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.artefact.outputs.path }}.sha256
+          archive: false
           retention-days: 14
 
       - name: Attach to the release
@@ -136,8 +143,9 @@ jobs:
 
           - Wi-Fi \`cybics-mgmt\`, password \`cybics-mgmt\` (unless changed).
           - Web interface: \`http://10.42.0.1\` or \`http://cybics-mgmt.local\`.
-          - The admin password is shown on the console (HDMI) if you did not set one.
-          - SSH: \`pi\` / \`raspberry\`. **Change it.**
+          - The first visit to \`http://10.42.0.1/admin\` sets the admin password (unless set in
+            \`cybics-mgmt.txt\`); do it before participants join the network.
+          - SSH: \`pi\` / \`raspberry\`. **Change it** under *Passwords* in the web interface.
 
           The first boot loads the containers and takes a few minutes; later boots take seconds.
           NOTE

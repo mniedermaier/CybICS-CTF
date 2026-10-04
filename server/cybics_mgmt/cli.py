@@ -54,6 +54,15 @@ def init_app(app):
                 os.unlink(os.path.join(directory, name))
                 click.echo(f"Removed old backup {name}.")
 
+    @app.cli.command("reset-admin-password")
+    def reset_admin_password():
+        """Forget the admin password set in the browser; the next visit to /admin sets a new one."""
+        if current_app.config.get("ADMIN_PASSWORD"):
+            raise click.ClickException("The admin password comes from MGMT_ADMIN_PASSWORD; change it there.")
+        get_db().execute("DELETE FROM admin_credentials")
+        audit("admin_password_reset", actor="cli")
+        click.echo("Admin password removed. The next visit to /admin sets a new one; do that before anyone else can.")
+
     @app.cli.command("login-link")
     @click.option("--minutes", type=int, default=10, help="How long the link stays valid.")
     def login_link(minutes):

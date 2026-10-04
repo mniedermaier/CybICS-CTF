@@ -14,7 +14,8 @@ WIFI_PASSWORD=cybics-mgmt
 WIFI_COUNTRY=US
 
 # Password of the web interface, at least 8 characters, no ' quote. Leave it
-# empty and one is generated at the first start and shown on the console (HDMI).
+# empty to set it in the browser at the first visit to http://10.42.0.1/admin
+# (do that before participants join the network: whoever comes first sets it).
 ADMIN_PASSWORD=
 
 # The enrolment code CybICS boards use to join on their own on this network.

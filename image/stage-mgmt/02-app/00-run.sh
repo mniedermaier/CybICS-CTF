@@ -14,6 +14,12 @@ ls -lh "${ROOTFS_DIR}/opt/cybics-mgmt/images/"
 
 install -m 755 files/cybics-mgmt-config "${ROOTFS_DIR}/usr/local/sbin/cybics-mgmt-config"
 install -m 755 files/cybics-mgmt-issue "${ROOTFS_DIR}/usr/local/sbin/cybics-mgmt-issue"
+install -m 755 files/cybics-mgmt-host "${ROOTFS_DIR}/usr/local/sbin/cybics-mgmt-host"
+
+# Requests from the server to the host (the pi password): a tmpfs directory,
+# mounted into the server by the compose override.
+install -m 644 files/cybics-mgmt.tmpfiles "${ROOTFS_DIR}/etc/tmpfiles.d/cybics-mgmt.conf"
+install -m 644 files/docker-compose.override.yml "${ROOTFS_DIR}/opt/cybics-mgmt/docker-compose.override.yml"
 
 # The settings file lives on the boot partition, so it can be edited on any computer.
 install -m 644 files/cybics-mgmt.txt "${ROOTFS_DIR}/boot/firmware/cybics-mgmt.txt"

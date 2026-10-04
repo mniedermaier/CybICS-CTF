@@ -303,7 +303,7 @@ automatically. The UID identifies a board; it does not authenticate one.
 ## Deployment
 
 - **Server**: `docker compose up -d` starts nginx in front of gunicorn, with one volume (`/data`:
-  database, secret key, generated admin password).
+  database, secret key; the admin password is set at the first visit and stored as a hash).
   - nginx reads each request completely, with 5 s timeouts, before gunicorn sees it. Slow or idle
     connections cost only nginx, so they cannot starve gunicorn's thread pool;
     `tools/slowloris_check.py` checks this in CI.

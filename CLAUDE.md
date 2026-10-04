@@ -50,7 +50,9 @@ Never stage `server/data/`, `*.sqlite`, `.env` or anything holding a real admin 
   - `errors.py`: `MgmtError`, the base of every error a caller can fix (`ctf.CTFError` is one).
   - `device_input.py`: checks for what installations send about themselves (identity, status),
     shared by both parts.
-  - `security.py`: tokens, hashing, the rate limiter, admin session and CSRF.
+  - `security.py`: tokens, hashing, the rate limiter, admin password and session, CSRF.
+  - `host.py`: requests to the host on the Raspberry Pi image (the `pi` password), through
+    `MGMT_HOST_DIR`; the image's root service `cybics-mgmt-host` applies them.
   - `db.py`: SQLite and migrations.
   - `views.py`: template filters, error pages and security headers.
   - `cli.py`: `flask --app cybics_mgmt ...` commands (backup, login-link).
@@ -184,8 +186,13 @@ same way: `docker run --rm -v "$PWD:/src" python:3.12-alpine sh -c 'cd /src && r
 - **Every organiser action is logged** through `security.audit()`, which writes the `admin_log` table
   and a WARNING log line. A new admin route or CLI command that changes state must call it (CLI
   commands pass `actor="cli"`).
-- **Secrets are never empty.** `_persistent_secret` replaces an empty or short file, and
-  `check_admin_password` refuses an empty password on either side.
+- **Secrets are never empty.** `_persistent_secret` replaces an empty or short secret key file, and
+  `check_admin_password` refuses an empty password. Without `MGMT_ADMIN_PASSWORD`, nobody is admin
+  until the first visit sets a password (`admin_setup_needed`); it is stored as a scrypt hash only,
+  and a change ends every other session.
+- **The server never acts on its host by itself.** On the Raspberry Pi image it may only drop a
+  request into `MGMT_HOST_DIR` (a tmpfs); `cybics-mgmt-host` accepts nothing but a new password for
+  `pi`, deletes the request first and reports in `status.json`. The containers stay unprivileged.
 - **Slow hashing stays outside the write lock, and never queues for long.** Team passwords are
   hashed and checked before `transaction()`, through `security.hash_password`/`verify_password`.
   Those wait at most `HASH_WAIT` for one of two slots, then raise `HashingBusy` (503). Cheap refusals
