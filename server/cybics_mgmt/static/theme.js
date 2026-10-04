@@ -6,7 +6,8 @@
 // projector tab can be pinned to one theme.
 (function () {
   "use strict";
-  var KEY = "cybics-ctf-theme";
+  var KEY = "cybics-mgmt-theme";
+  var LEGACY_KEY = "cybics-ctf-theme";   // before the rename to CybICS-mgmt
   var ORDER = ["system", "light", "dark"];
   var LABELS = { system: "System theme", light: "Light theme", dark: "Dark theme" };
   var root = document.documentElement;
@@ -15,6 +16,7 @@
   function stored() {
     try {
       var value = window.localStorage.getItem(KEY);
+      if (value === null) value = window.localStorage.getItem(LEGACY_KEY);
       return ORDER.indexOf(value) >= 0 ? value : "system";
     } catch (e) {
       return "system";

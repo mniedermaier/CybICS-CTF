@@ -4,8 +4,8 @@ import json
 import pytest
 
 from conftest import CATALOG, FLAGS, auth, enroll
-from cybics_ctf import ctf
-from cybics_ctf.db import get_db
+from cybics_mgmt.ctf import logic as ctf
+from cybics_mgmt.db import get_db
 
 
 def solve(client, token, challenge, flag=None):
@@ -302,7 +302,7 @@ def test_a_password_change_during_enrolment_is_retried_not_hashed_under_the_lock
 
 
 def test_a_board_computed_before_an_invalidation_is_not_cached(app, event, monkeypatch):
-    from cybics_ctf import api
+    from cybics_mgmt.ctf import api
     real_board = ctf.scoreboard
 
     def solve_lands_meanwhile(db, event_id):

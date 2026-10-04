@@ -15,7 +15,7 @@
 <header class="top">
   <a class="brand" href="{{ url_for('public.index') }}">
     <img src="{{ url_for('static', filename='img/cybics-logo.png') }}" alt="CybICS" width="127" height="26">
-    <span>CTF</span>
+    <span>mgmt</span>
   </a>
   <nav>{% block nav %}{% endblock %}</nav>
   <div class="header-actions">
@@ -40,7 +40,7 @@
   {% endwith %}
   {% block content %}{% endblock %}
 </main>
-<footer>{{ server_name }} &middot; CybICS CTF server {{ app_version }} &middot; <a href="https://github.com/mniedermaier/CybICS">CybICS on GitHub</a></footer>
+<footer>{% if server_name != "CybICS-mgmt" %}{{ server_name }} &middot; {% endif %}CybICS-mgmt {{ app_version }} &middot; <a href="https://github.com/mniedermaier/CybICS">CybICS on GitHub</a></footer>
 {% block scripts %}{% endblock %}
 </body>
 </html>

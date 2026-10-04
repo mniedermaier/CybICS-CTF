@@ -22,26 +22,30 @@ jobs:
     name: Hardened stack and abuse check
     runs-on: ubuntu-latest
     env:
-      CTF_ADMIN_PASSWORD: ci-password-123
+      MGMT_ADMIN_PASSWORD: ci-password-123
     steps:
       - uses: actions/checkout@v7
       - run: docker compose up -d --build
       - name: Wait for health
         run: |
           for i in $(seq 1 30); do curl -fs localhost:8000/healthz && break; sleep 1; done
+          # Deployed clients check "service"; it stays "cybics-ctf" in v1.
           curl -fs localhost:8000/api/v1/info | grep -q '"service":"cybics-ctf"'
+          curl -fs localhost:8000/api/v1/info | grep -q '"product":"cybics-mgmt"'
       - name: Organiser CLI round trip, as documented in the README
         run: |
           printf '%s' '{"categories":{"c":{"challenges":[{"id":"x","title":"X","points":100,"flag":"CybICS(ci)"}]}}}' > catalog.json
-          docker compose exec -T ctf-server flask --app cybics_ctf create-event ci "CI Event"
-          docker compose exec -T ctf-server flask --app cybics_ctf import-catalog ci - < catalog.json
-          docker compose exec -T ctf-server flask --app cybics_ctf set-state ci running
-          docker compose exec -T ctf-server flask --app cybics_ctf backup /data/ci-backup.sqlite
+          docker compose exec -T server flask --app cybics_mgmt create-event ci "CI Event"
+          docker compose exec -T server flask --app cybics_mgmt import-catalog ci - < catalog.json
+          docker compose exec -T server flask --app cybics_mgmt set-state ci running
+          docker compose exec -T server flask --app cybics_mgmt backup /data/ci-backup.sqlite
+          # The package name from before the rename still works for old cron jobs.
+          docker compose exec -T server flask --app cybics_ctf list-events | grep -q '^ci '
           curl -fs localhost:8000/api/v1/events/ci/scoreboard
       - name: One abusive client cannot freeze the server
         run: |
           ulimit -n 8192
-          CODE=$(docker compose exec -T ctf-server flask --app cybics_ctf list-events | awk '/^ci /{print $3}')
+          CODE=$(docker compose exec -T server flask --app cybics_mgmt list-events | awk '/^ci /{print $3}')
           python3 tools/slowloris_check.py localhost 8000 --join-code "$CODE"
       - name: No errors in the server log
         run: |

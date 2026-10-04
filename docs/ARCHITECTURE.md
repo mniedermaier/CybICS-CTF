@@ -1,7 +1,8 @@
 # Architecture
 
-The CybICS CTF server is an **optional** central point for events with several
-[CybICS](https://github.com/mniedermaier/CybICS) instances. Each instance may be virtual (the Docker
+This document describes the CTF part of CybICS-mgmt; the fleet part is in
+[MGMT_DESIGN.md](MGMT_DESIGN.md). The CTF server is an **optional** central point for events with
+several [CybICS](https://github.com/mniedermaier/CybICS) instances. Each instance may be virtual (the Docker
 stack on a participant's laptop) or physical (a Raspberry Pi Zero 2 W board). A CybICS instance never
 depends on this server: it validates flags and keeps progress locally, as it always has. Once a
 participant enrols it from the landing page, it also reports its team, its status and its solves here,
@@ -10,7 +11,7 @@ and the organiser gets a shared scoreboard and an overview of every instance.
 ```
  participant laptops                     event network / internet                 organiser
 ┌──────────────────────┐                                                     ┌──────────────────┐
-│ CybICS (virtual)     │   POST /api/v1/enroll      (once)                    │ CybICS CTF server│
+│ CybICS (virtual)     │   POST /api/v1/enroll      (once)                    │ CybICS-mgmt      │
 │  landing ── client ──┼──────────────────────────────────────────────────►  │  Flask + SQLite  │
 └──────────────────────┘   POST /api/v1/heartbeat   (every 30 s)              │                  │
 ┌──────────────────────┐   POST /api/v1/solves      (on each local solve)     │  /admin          │
@@ -85,10 +86,10 @@ October 2026).
 
 | Path | What it is |
 |---|---|
-| `server/cybics_ctf/` | The server: a Flask app factory, a JSON API, an admin UI and a public scoreboard. |
-| `server/cybics_ctf/ctf.py` | Domain logic: events, catalog, teams, instances, solves, scoring. It has no HTTP code. |
-| `server/cybics_ctf/db.py` | SQLite (WAL) with numbered migrations tracked in `PRAGMA user_version`. |
-| `client/cybics_ctf_client.py` | Reference client to be vendored into CybICS' landing service. It is standard library only. |
+| `server/cybics_mgmt/` | The server: a Flask app factory, a JSON API, an admin UI and a public scoreboard. |
+| `server/cybics_mgmt/ctf/` | The CTF part. `logic.py` holds the domain logic (events, catalog, teams, instances, solves, scoring) and has no HTTP code; `api.py`, `admin.py`, `public.py` and `cli.py` attach the CTF routes and commands to the shared blueprints. |
+| `server/cybics_mgmt/db.py` | SQLite (WAL) with numbered migrations tracked in `PRAGMA user_version`. |
+| `client/cybics_mgmt_client.py` | Reference client to be vendored into CybICS' landing service. It is standard library only. |
 | `server/tests/` | pytest suite, including the client against a live HTTP server. |
 
 ### Data model
@@ -281,17 +282,17 @@ board; it does not authenticate one.
     `no-new-privileges` set.
   - Admin sessions are signed cookies, and each one is also recorded server side. Logging out ends
     the session in the database, so a copied cookie stops working too.
-  - `flask --app cybics_ctf backup <path>` writes a consistent copy of the database with
+  - `flask --app cybics_mgmt backup <path>` writes a consistent copy of the database with
     `VACUUM INTO`, and is safe while the server runs. Copying the `.sqlite` file alone can miss
     writes that are still in the WAL.
   - gunicorn runs with 1 worker and 16 threads.
   - SQLite and the in-memory rate limiter both want a single process, and that is ample for a few
     hundred instances heartbeating every 30 s, which is about 10 requests per second.
 - **TLS**: terminate it in an outer proxy (Caddy, Traefik) in front of the bundled nginx. Then set:
-  - `CTF_BIND=127.0.0.1`, so the outer proxy is the only way in;
-  - `CTF_OUTER_PROXY=<its address as nginx sees it>`, so nginx (and with it the app and the
+  - `MGMT_BIND=127.0.0.1`, so the outer proxy is the only way in;
+  - `MGMT_OUTER_PROXY=<its address as nginx sees it>`, so nginx (and with it the app and the
     enrolment queue) takes the client address and `https` from that proxy and from nobody else;
-  - `CTF_SECURE_COOKIES=1`.
+  - `MGMT_SECURE_COOKIES=1`.
   - Plain HTTP is acceptable on an isolated event Wi-Fi.
   - The client accepts a private CA file for a self-signed server.
 - **Event network for physical boards**: see [CYBICS_INTEGRATION.md](CYBICS_INTEGRATION.md#physical-device-second-wi-fi-interface).

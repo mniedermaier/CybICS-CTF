@@ -2,12 +2,15 @@
 
 Guidance for Claude Code and other AI assistants working in this repository.
 
-CybICS-CTF is the **optional** central CTF server for [CybICS](https://github.com/mniedermaier/CybICS),
-the open-source ICS security training platform. Virtual CybICS instances (Docker on a laptop) and
-physical ones (a Raspberry Pi Zero 2 W board with a USB Wi-Fi dongle as uplink) enrol from their
-landing page. Once enrolled, they report their team, status and solves, and the organiser runs a
-shared scoreboard. Read `docs/ARCHITECTURE.md` before changing behaviour; it records the
-investigation of CybICS that the design is based on.
+CybICS-mgmt (called CybICS-CTF until October 2026) is the **optional** central server for
+[CybICS](https://github.com/mniedermaier/CybICS), the open-source ICS security training platform. It
+runs CTF events today and grows into fleet management for CybICS installations
+(`docs/MGMT_DESIGN.md`: decisions, phases and the fleet invariants). Virtual CybICS instances (Docker
+on a laptop) and physical ones (a Raspberry Pi Zero 2 W board with a USB Wi-Fi dongle as uplink)
+enrol from their landing page. Once enrolled, they report their team, status and solves, and the
+organiser runs a shared scoreboard. Read `docs/ARCHITECTURE.md` (the CTF part) and
+`docs/MGMT_DESIGN.md` (the fleet part) before changing behaviour; they record the investigation of
+CybICS that the design is based on.
 
 ## Language
 
@@ -35,21 +38,30 @@ Never stage `server/data/`, `*.sqlite`, `.env` or anything holding a real admin 
 
 ## Repository map
 
-- `server/cybics_ctf/`: the Flask app.
-  - `__init__.py`: app factory and configuration (`CTF_*` environment variables).
-  - `ctf.py`: all domain logic (events, catalog, teams, instances, solves, scoring). It has no
-    request handling, and every function takes the DB connection.
-  - `api.py`: the instance API under `/api/v1`.
-  - `admin.py`: the organiser UI under `/admin`.
-  - `public.py`: the start page, the scoreboard, `/healthz` and `/favicon.ico`.
+- `server/cybics_mgmt/`: the Flask app.
+  - `__init__.py`: app factory and configuration (`MGMT_*` environment variables, read through
+    `env()`, which falls back to the old `CTF_*` names).
+  - `api.py`: the `/api/v1` blueprint, `/info` and what every endpoint shares (`json_body`,
+    `rate_limit`, the error format).
+  - `admin.py`: the `/admin` blueprint, login, sessions, `LOCKOUTS` and `csv_response`.
+  - `public.py`: the start page, `/healthz` and `/favicon.ico`.
+  - `errors.py`: `MgmtError`, the base of every error a caller can fix (`ctf.CTFError` is one).
   - `security.py`: tokens, hashing, the rate limiter, admin session and CSRF.
-  - `db.py`: SQLite and migrations.
+  - `db.py`: SQLite, migrations, and the one-off adoption of the pre-rename `cybics-ctf.sqlite`.
   - `views.py`: template filters, error pages and security headers.
-  - `cli.py`: `flask --app cybics_ctf ...` commands.
-- `server/tests/`: pytest. `test_client.py` runs the reference client against a live server.
-- `client/cybics_ctf_client.py`: the reference client that CybICS' landing service vendors.
-- `docs/`: `ARCHITECTURE.md` (design and trust model), `API.md` (the contract) and
-  `CYBICS_INTEGRATION.md` (what has to change on the CybICS side).
+  - `cli.py`: `flask --app cybics_mgmt ...` commands (backup, login-link).
+  - `ctf/`: the CTF part. Its modules attach routes and commands to the shared blueprints and CLI, so
+    endpoint names stay `api.*`, `admin.*` and `public.*`.
+    - `logic.py`: all CTF domain logic (events, catalog, teams, instances, solves, scoring). It has
+      no request handling, and every function takes the DB connection. Code imports it as
+      `from .ctf import logic as ctf`.
+    - `api.py`, `admin.py`, `public.py` (the scoreboard), `cli.py` (event commands).
+- `server/cybics_ctf/`: a shim, so `flask --app cybics_ctf` keeps working.
+- `server/tests/`: pytest. `test_client.py` runs the reference client against a live server;
+  `test_compat.py` guards the rename's compatibility.
+- `client/cybics_mgmt_client.py`: the reference client that CybICS' landing service vendors.
+- `docs/`: `ARCHITECTURE.md` (CTF design and trust model), `MGMT_DESIGN.md` (fleet design and plan),
+  `API.md` (the contract) and `CYBICS_INTEGRATION.md` (what has to change on the CybICS side).
 - `docker-compose.yml`, `server/Dockerfile` and `proxy/nginx.conf`: the deployment. nginx (the only
   published port) runs in front of gunicorn, with the `/data` volume.
 - `tools/slowloris_check.py`: proves that slow clients cannot starve gunicorn. CI runs it.
@@ -59,7 +71,7 @@ Never stage `server/data/`, `*.sqlite`, `.env` or anything holding a real admin 
 
 ```bash
 cd server && pip install -r requirements-dev.txt && ruff check .. && pytest   # needs Python 3.12
-CTF_ADMIN_PASSWORD=... docker compose up -d --build           # http://localhost:8000
+MGMT_ADMIN_PASSWORD=... docker compose up -d --build          # http://localhost:8000
 python3 tools/slowloris_check.py localhost 8000              # against the running stack
 ```
 
@@ -87,6 +99,10 @@ same way: `docker run --rm -v "$PWD:/src" python:3.12-alpine sh -c 'cd /src && r
 - **The server is optional.** CybICS must work without it. The client makes no network call until
   the user enrols, never blocks or fails a local submission, and queues reports through outages.
   Any feature that would make CybICS depend on the server is out of scope.
+- **The rename to CybICS-mgmt stays invisible to deployed releases and installations.**
+  - `/api/v1/info` answers `"service": "cybics-ctf"` forever in v1: deployed clients check it.
+  - `CTF_*` settings, `flask --app cybics_ctf`, the `cybics-ctf.sqlite` file, `cybics-ctf-*`
+    backups and the `cybics-ctf-theme` key are still honoured. `test_compat.py` covers them.
 - **The API is a contract with deployed CybICS releases.** Changes under `/api/v1` may only *add*
   fields or endpoints. Renaming, removing or changing the meaning of anything needs `/api/v2`, served
   alongside v1. Update `docs/API.md` in the same change.
@@ -187,7 +203,8 @@ Per-instance flags would be a CybICS-wide change and are discussed in `docs/ARCH
   `var(--...)` everywhere and never hard-code a colour in a rule.
 - In light mode, orange text uses `--accent-text`, because `#ff6b00` fails contrast on white.
 - `static/theme.js` runs synchronously in `<head>` and sets `data-theme` before first paint. The
-  preference is `system`, `light` or `dark`, kept in `localStorage` under `cybics-ctf-theme`.
+  preference is `system`, `light` or `dark`, kept in `localStorage` under `cybics-mgmt-theme` (the
+  old `cybics-ctf-theme` is still read).
 - Brand assets are copies from CybICS. Replace them from there; do not edit them:
   - `static/img/cybics-logo.png` comes from `software/landing/pics/CybICS_logo.png`;
   - `static/img/favicon.ico` comes from `software/landing/pics/favicon.ico`;

@@ -14,7 +14,7 @@ ignore = [
 # The client catches everything on purpose: it runs inside CybICS' landing
 # page and must never take a local submission or the sender thread down
 # (see the "client never takes landing down" invariant in CLAUDE.md).
-"client/cybics_ctf_client.py" = ["BLE001", "S110"]
+"client/cybics_mgmt_client.py" = ["BLE001", "S110"]
 
 [lint.isort]
-known-first-party = ["cybics_ctf", "cybics_ctf_client", "conftest"]
+known-first-party = ["cybics_mgmt", "cybics_ctf", "cybics_mgmt_client", "conftest"]

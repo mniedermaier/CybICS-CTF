@@ -7,9 +7,10 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "client"))
 
-from cybics_ctf import create_app, ctf  # noqa: E402
-from cybics_ctf.db import get_db  # noqa: E402
-from cybics_ctf.security import limiter  # noqa: E402
+from cybics_mgmt import create_app  # noqa: E402
+from cybics_mgmt.ctf import logic as ctf  # noqa: E402
+from cybics_mgmt.db import get_db  # noqa: E402
+from cybics_mgmt.security import limiter  # noqa: E402
 
 ADMIN_PASSWORD = "test-admin-password"
 

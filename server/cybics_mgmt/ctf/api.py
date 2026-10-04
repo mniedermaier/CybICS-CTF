@@ -1,52 +1,21 @@
 """
-JSON API for CybICS instances (/api/v1). The contract is documented in docs/API.md.
-
-Instances authenticate with the bearer token they receive at enrolment. All
-errors come back as {"error": {"code": ..., "message": ...}} so the landing
-page can show the message to the user unchanged.
+The CTF endpoints of /api/v1: enrolment, heartbeat, solves, the catalog and the
+public scoreboard. The contract is documented in docs/API.md.
 """
 import logging
 import threading
 import time
 import unicodedata
 
-from flask import Blueprint, current_app, g, jsonify, request
+from flask import current_app, g, jsonify, request
 
-from . import __version__, ctf
-from .ctf import CTFError
-from .db import get_db, now
-from .security import HashingBusy, client_ip, limiter
+from ..api import bp, json_body, rate_limit
+from ..db import get_db, now
+from ..security import HashingBusy, client_ip, limiter
+from . import logic as ctf
+from .logic import CTFError
 
-log = logging.getLogger("cybics_ctf")
-
-API_VERSION = 1
-
-bp = Blueprint("api", __name__, url_prefix="/api/v1")
-
-
-@bp.errorhandler(CTFError)
-def _ctf_error(exc):
-    return _error(exc.code, exc.message, exc.status)
-
-
-def _error(code, message, status):
-    return jsonify({"error": {"code": code, "message": message}}), status
-
-
-def _json_body():
-    try:
-        data = request.get_json(silent=True)
-    except RecursionError:   # absurdly nested JSON; silent=True only covers ValueError
-        data = None
-    if not isinstance(data, dict):
-        raise CTFError("invalid_json", "Request body must be a JSON object.")
-    return data
-
-
-def _rate_limit(key, limit_name):
-    limit, window = current_app.config[limit_name]
-    if not limiter.hit(key, limit, window):
-        raise CTFError("rate_limited", "Too many requests, slow down.", 429)
+log = logging.getLogger("cybics_mgmt")
 
 
 def _authenticate():
@@ -83,13 +52,6 @@ def _event_json(event):
             "first_blood_bonus": event["first_blood_bonus"]}
 
 
-@bp.get("/info")
-def info():
-    """Unauthenticated; the landing page's 'Test connection' button calls this."""
-    return jsonify({"service": "cybics-ctf", "name": current_app.config["SERVER_NAME_DISPLAY"],
-                    "version": __version__, "api_version": API_VERSION, "server_time": now()})
-
-
 def _usable(value):
     return isinstance(value, str) and ctf._encodable(value)
 
@@ -113,7 +75,7 @@ def enroll():
     newteam_key = f"newteam:{client_ip()}"
     creating = False
     try:
-        data = _json_body()
+        data = json_body()
         code, name = data.get("join_code"), data.get("team_name")
         # Only well-formed strings reach SQLite here; enroll() turns the rest into a 400.
         event_row = ctf.get_event_by_join_code(db, code) if _usable(code) and code.strip() else None
@@ -173,8 +135,8 @@ def heartbeat():
     local solve missing from that list) and new announcements.
     """
     auth = _authenticate()
-    _rate_limit(f"hb:{auth['instance_id']}", "RATE_LIMIT_HEARTBEAT")
-    data = _json_body()
+    rate_limit(f"hb:{auth['instance_id']}", "RATE_LIMIT_HEARTBEAT")
+    data = json_body()
     db = get_db()
     ctf.record_heartbeat(db, auth["instance_id"], data.get("status"), client_ip())
     event = ctf.get_event(db, auth["event_id"])
@@ -202,8 +164,8 @@ def heartbeat():
 @bp.post("/solves")
 def submit_solve():
     auth = _authenticate()
-    _rate_limit(f"solve:{auth['instance_id']}", "RATE_LIMIT_SOLVE")
-    data = _json_body()
+    rate_limit(f"solve:{auth['instance_id']}", "RATE_LIMIT_SOLVE")
+    data = json_body()
     result, points, bonus = ctf.submit_solve(get_db(), auth, data.get("challenge_id"), data.get("flag"),
                                              data.get("solved_at"), client_ip())
     if result == ctf.ACCEPTED:

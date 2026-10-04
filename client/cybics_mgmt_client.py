@@ -1,8 +1,9 @@
 """
-Reference client for the CybICS CTF central server.
+Reference client for CybICS-mgmt, the optional central server for CybICS.
 
 Meant to be vendored into CybICS' landing service (software/landing/modules/)
-as a single file: standard library only, Python 3.9+.
+as a single file: standard library only, Python 3.9+. CybICS v1.2.4 ships it
+as modules/central_ctf.py.
 
 Design rules, all following from "the central server is optional":
 
@@ -224,7 +225,7 @@ class CTFClient:
         """GET /info; returns the server's info dict or raises CTFClientError."""
         _, info = self._request("GET", "/info", server_url=self.normalize_url(server_url))
         if info.get("service") != "cybics-ctf":
-            raise CTFClientError("not_a_ctf_server", "That address is not a CybICS CTF server.")
+            raise CTFClientError("not_a_ctf_server", "That address is not a CybICS-mgmt server.")
         return info
 
     def enroll(self, server_url, join_code, team_name, team_password, instance):
