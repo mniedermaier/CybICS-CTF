@@ -1,6 +1,6 @@
 <p align="center">
   <img alt="CybICS Logo" src="docs/pics/CybICS_logo.png" height="120" />
-  <p align="center"><strong>mgmt</strong> &middot; The central server for CybICS: CTF events and fleet management.</p>
+  <p align="center"><strong>mgmt</strong> &middot; Manage every CybICS installation from one place, and run CTF events on them.</p>
 </p>
 
 ---
@@ -29,16 +29,20 @@
 control system security. It runs virtually in Docker or on a Raspberry Pi with a custom PCB, and it
 ships with 22 capture-the-flag challenges.
 
-CybICS-mgmt is the central server for many CybICS installations. Each installation connects once
-from its landing page, virtual or physical alike, and becomes a **device** on the server. The server
-has two parts:
+CybICS-mgmt is the **management server for CybICS**: one place for every CybICS installation in a
+classroom or a lab, virtual or physical. Each installation connects once from its landing page and
+becomes a **device**:
 
-- **CTF events**: devices join teams, and many CybICS installations become **one event**. Every
-  solved challenge appears on a shared, animated scoreboard. The organiser gets one place to run the
-  workshop: teams, devices, moderation and announcements.
-- **Fleet management**: every device in one overview, across events, with telemetry and, where the
-  device allows it, remote actions such as restarting services. The design is in
-  [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md).
+- **See the whole fleet**: online state, version, service health, temperature and more, across
+  events, sorted into groups such as rooms or sets of boards.
+- **Act on it**: identify a board, show a message, restart services, reset the local CTF progress,
+  collect logs. Every action is signed by the server, and a device runs only what its user allowed.
+- **Bring the network along**: the Raspberry Pi image hosts the Wi-Fi network `cybics-mgmt`, and
+  CybICS boards join it and enrol on their own.
+
+**CTF events are built in.** Devices join teams, every solve lands on a shared, animated scoreboard
+for the projector, and the organiser runs the workshop from the same interface: teams, moderation,
+announcements. The design is in [docs/MGMT_DESIGN.md](docs/MGMT_DESIGN.md).
 
 CybICS-mgmt (called CybICS-CTF until October 2026) ships together with the CybICS release that
 replaces v1.2.4; that release has the client built in.
@@ -49,16 +53,17 @@ server goes away, and reports what it missed when the server comes back.
 
 ### Why CybICS-mgmt?
 
-- ✅ **Projector-ready scoreboard**: ranks glide when teams overtake each other, scores count up, and
-  first bloods take over the screen. It fills exactly one screen, never shows a scrollbar, and scrolls
-  long team lists by whole rows.
-- ✅ **Virtual and physical**: Docker instances and Raspberry Pi boards (via a USB Wi-Fi dongle) join
-  the same event; boards are recognised by their STM32 UID.
+- ✅ **One overview for every installation**: Docker stacks on laptops and Raspberry Pi boards side by
+  side, with labels, groups, outdated versions marked, and boards recognised by their STM32 UID.
+- ✅ **Remote actions you can trust**: a fixed list of actions, signed and sequenced by the server,
+  switched on per action on each device, and every job and its result on the log.
+- ✅ **A classroom in a box**: one Raspberry Pi hosts the server and the Wi-Fi; boards join by
+  themselves; the admin password and the Pi's own login are set in the browser.
+- ✅ **CTF events built in**: a projector-ready scoreboard where ranks glide, scores count up and
+  first bloods take over the screen, an optional first blood bonus, and moderation that keeps the
+  evidence.
 - ✅ **Built for a classroom**: one NAT address for everybody, a participant trying to disrupt the
   event, a flaky Wi-Fi. None of these lock out honest teams or lose solves.
-- ✅ **Moderation with evidence**: void a solve, take a device out of the event, disqualify a team.
-  Nothing is deleted, and every organiser action is logged.
-- ✅ **Optional first blood bonus**: a percentage of a challenge's points for the first team to solve it.
 - ✅ **Hardened by default**: two read-only containers without capabilities, a buffering nginx in
   front, a strict Content Security Policy, CSRF protection everywhere.
 
@@ -71,7 +76,9 @@ server goes away, and reports what it missed when the server comes back.
 - [Status](#status)
 - [Quick Start](#-quick-start)
 - [Raspberry Pi Image](#-raspberry-pi-image)
-- [Running an Event](#-running-an-event)
+- [Managing the Fleet](#%EF%B8%8F-managing-the-fleet)
+- [Running a CTF Event](#-running-a-ctf-event)
+- [Operating the Server](#-operating-the-server)
 - [Configuration](#%EF%B8%8F-configuration)
 - [How It Works](#-how-it-works)
 - [Documentation](#documentation)
@@ -82,24 +89,24 @@ server goes away, and reports what it missed when the server comes back.
 
 ## Screenshots
 
-### 📺 Scoreboard for the projector
-**Recorded live: a team climbs, a first blood takes over the screen, ranks move with ▲ and ▼**
-
-<img alt="The live scoreboard: Blue Team climbs, SCADA Sharks get a first blood, Modbus Mafia takes the lead" src="docs/pics/scoreboard-live.gif" width="100%">
-
-<table>
-<tr>
-<td width="55%" valign="top">
-
 ### 🛰️ Fleet
-**Every CybICS installation across events: online state, version, services, team, allowed actions**
+**Every CybICS installation across events: online state, version, services, group, team, allowed actions**
 
 <img alt="The fleet page with boards and laptops in two groups" src="docs/pics/fleet.png" width="100%">
 
-</td>
-<td width="45%" valign="top">
+<table>
+<tr>
+<td width="62%" valign="top">
 
-### 🛠️ Organiser view
+### 📺 CTF scoreboard
+**Recorded live: a team climbs, a first blood takes over the screen, ranks move**
+
+<img alt="The live scoreboard: Blue Team climbs, SCADA Sharks get a first blood, Modbus Mafia takes the lead" src="docs/pics/scoreboard-live.gif" width="100%">
+
+</td>
+<td width="38%" valign="top">
+
+### 🛠️ Event view
 **Join code, event state, teams, announcements**
 
 <img alt="The organiser's event page" src="docs/pics/admin.png" width="100%">
@@ -118,14 +125,13 @@ drawn by `tools/readme_animation.py`; the scoreboard was recorded from a real se
 
 | Part | State |
 |---|---|
-| CTF: API, admin UI, scoreboard, moderation, audit | ✅ Ready |
+| Fleet: devices across events, telemetry, groups, enrolment codes, labels, retiring | ✅ Ready |
+| Fleet: signed remote actions on devices that allow them | ✅ Ready |
+| Admin password set in the browser, the Pi's `pi` password from the admin UI | ✅ Ready |
+| CTF: events, teams, scoreboard, moderation, audit | ✅ Ready |
 | Reference client (`client/cybics_mgmt_client.py`) | ✅ Ready, tested on Python 3.9 and 3.12 |
-| Fleet: device overview across events, groups, enrolment codes, putting devices into teams | ✅ Ready |
-| Fleet: remote actions on devices that allow them | ✅ Server and client ready |
-| CybICS landing page: **Settings → CybICS-mgmt** | 🚧 In review: [CybICS#263](https://github.com/mniedermaier/CybICS/pull/263), for the release that replaces v1.2.4 |
-| CybICS Raspberry Pi: second Wi-Fi interface for the uplink | ✅ In CybICS v1.2.4 (USB Wi-Fi dongle) |
 | Raspberry Pi image of CybICS-mgmt with the `cybics-mgmt` access point | ✅ Built by CI, attached to every release |
-| CybICS boards joining `cybics-mgmt` on their own | 🚧 In review: [CybICS#263](https://github.com/mniedermaier/CybICS/pull/263) (with the landing integration) |
+| CybICS: *Settings → CybICS-mgmt*, remote actions, boards joining `cybics-mgmt` on their own | ✅ In CybICS `main` ([CybICS#263](https://github.com/mniedermaier/CybICS/pull/263)), for the release after v1.2.4 |
 
 ---
 
@@ -133,8 +139,8 @@ drawn by `tools/readme_animation.py`; the scoreboard was recorded from a real se
 
 ### Prerequisites
 
-- Docker with Docker Compose
-- The `ctf_config.json` of the CybICS version your participants run
+- Docker with Docker Compose, or the [Raspberry Pi image](#-raspberry-pi-image)
+- For CTF events: the `ctf_config.json` of the CybICS version your participants run
   (`software/landing/ctf_config.json` in the [CybICS](https://github.com/mniedermaier/CybICS) repository)
 
 ### Installation
@@ -151,15 +157,26 @@ Open **`http://<host>:8000/admin`**. The first visit sets the admin password in 
 the server. Change it later under *Passwords*; if it is lost, `docker compose exec server flask --app
 cybics_mgmt reset-admin-password` lets the next visit set a new one.
 
-### Your first event
+### Connect your CybICS installations
+
+1. **Set the admin password**: the first visit to `http://<host>:8000/admin` sets it.
+2. **Create an enrolment code** under *Fleet → Groups & codes*, optionally with a group (a room, a
+   set of boards).
+3. **Connect each CybICS**: in its landing page, *Settings → CybICS-mgmt*, enter the server address
+   and the code. Boards with a USB Wi-Fi dongle connect on their own when the Raspberry Pi image's
+   network `cybics-mgmt` is in range.
+4. **Manage them** in the *Fleet*: give boards labels, watch their health, and send actions once a
+   device allows them (see [Managing the Fleet](#%EF%B8%8F-managing-the-fleet)).
+
+### Your first CTF event
 
 1. **Create an event** on the *Events* page and note its **join code**.
 2. **Import the challenges**: on the event's *Challenges* page, upload CybICS'
    `software/landing/ctf_config.json`. Only a hash of each flag is stored.
 3. **Optional**: set a **first blood bonus** in the event settings, for example 10 %.
 4. **Let teams join**: in *Settings → CybICS-mgmt* of their CybICS, participants connect with the
-   server address and the join code, then join a team with the join code, a team name and a team
-   password. A new team needs a password of at least 8 characters that is not a well-known one.
+   server address and the join code (it works as an enrolment code too), then join a team with the
+   join code, a team name and a team password. A new team needs a password of at least 8 characters that is not a well-known one.
    Teammates enter the same team name and password on their own CybICS. You can also put a device
    into a team yourself, from its page in the *Fleet*.
 5. **Press Start.** Solves only count while the event is running. *Pause*, *Resume* and *Finish*
@@ -219,22 +236,7 @@ arm64). The release workflow builds it natively on an arm64 runner.
 
 ---
 
-## 🎯 Running an Event
-
-### During the event
-
-- **Instances** shows every device in the event with its team, kind (virtual or physical), version,
-  service health and last check-in. Devices that left are hidden unless you ask for them.
-- **Solves & audit** lists every solve, with filters and CSV exports. *Suspicious activity* shows
-  wrong flags and wrong team passwords. An unmodified CybICS never sends a wrong flag, so one there
-  means somebody is calling the API directly.
-- **Moderation**: **void** a solve (it stops scoring but stays on record), **revoke** a device's
-  membership (it leaves the event), **disqualify** a team. Several teams can be handled at once on
-  the *Teams* page.
-- **Announcements** reach every landing page in the event within one heartbeat (30 s).
-- **Log** keeps every organiser action, from the web UI and the command line.
-
-### The fleet
+## 🛰️ Managing the Fleet
 
 *Fleet* lists every CybICS installation the server knows, across events: online state, version (with
 an *outdated* marker against the newest in the fleet), service health, group and CTF team.
@@ -253,6 +255,27 @@ an *outdated* marker against the newest in the fleet), service health, group and
   to several devices at once from the list. Each device decides which actions it allows, all off by
   default, and runs only jobs signed with the key it pinned when it enrolled. Every job, its result
   and every organiser action are on the *Fleet log*.
+
+---
+
+## 🎯 Running a CTF Event
+
+### During the event
+
+- **Instances** shows every device in the event with its team, kind (virtual or physical), version,
+  service health and last check-in. Devices that left are hidden unless you ask for them.
+- **Solves & audit** lists every solve, with filters and CSV exports. *Suspicious activity* shows
+  wrong flags and wrong team passwords. An unmodified CybICS never sends a wrong flag, so one there
+  means somebody is calling the API directly.
+- **Moderation**: **void** a solve (it stops scoring but stays on record), **revoke** a device's
+  membership (it leaves the event), **disqualify** a team. Several teams can be handled at once on
+  the *Teams* page.
+- **Announcements** reach every landing page in the event within one heartbeat (30 s).
+- **Log** keeps every organiser action, from the web UI and the command line.
+
+---
+
+## 🔧 Operating the Server
 
 ### Locked out?
 
@@ -353,21 +376,25 @@ Outside Docker Compose, `MGMT_TRUST_PROXY=1`, `MGMT_FORWARDED_ALLOW_IPS` (the pr
 ## 🧩 How It Works
 
 ```
- participants                                                         organiser
+ CybICS installations                                                 organiser
 ┌────────────────────────┐   POST /api/v1/enroll     (once)        ┌──────────────────────┐
-│ CybICS (Docker)        │   POST /api/v1/ctf/join   (per event)   │  proxy (nginx)       │
-│  landing ─ client ─────┼──────────────────────────────────────►  │   └─ server          │
-└────────────────────────┘   POST /api/v1/heartbeat  (every 30 s)  │      Flask + SQLite  │
+│ CybICS (Docker)        │   POST /api/v1/heartbeat  (every 30 s:  │  proxy (nginx)       │
+│  landing ─ client ─────┼──── status out, signed jobs back) ───►  │   └─ server          │
+└────────────────────────┘   POST /api/v1/ctf/join   (per event)   │      Flask + SQLite  │
 ┌────────────────────────┐   POST /api/v1/solves     (each solve)  │                      │
-│ CybICS (Pi + PCB)      │                                         │  /admin              │
-│  landing ─ client ─────┼── wlan1 (USB dongle) ─────────────────► │  /scoreboard/<slug>  │
+│ CybICS (Pi + PCB)      │                                         │  /admin  (fleet, CTF)│
+│  landing ─ client ─────┼── USB Wi-Fi dongle, cybics-mgmt ─────►  │  /scoreboard/<slug>  │
 └────────────────────────┘                                         └──────────────────────┘
 ```
 
-- **Connect once, then join a team.** An installation connects with a code and becomes a device
-  with a token. It joins a team with the join code, a team name and password, or the organiser puts
-  it into one. From then on it sends a heartbeat every 30 s (status, version, service health) and
-  reports each solve its landing page has already validated locally.
+- **Connect once, managed from then on.** An installation connects with a code and becomes a device
+  with a token. Every 30 s its heartbeat reports status, version and service health, and the answer
+  carries any jobs for it. The device asks; nothing ever connects to it, so boards stay isolated on
+  their uplink.
+- **Actions only by consent.** A job runs only if the server signed it with the key the device pinned,
+  its sequence number is new, and the device's user allowed that action.
+- **CTF on top.** A device joins a team with the join code, a team name and password, or the
+  organiser puts it into one, and reports each solve its landing page has already validated locally.
 - **Nothing gets lost.** Reports wait in a persistent outbox while the server is unreachable. Every
   heartbeat compares the local solves with the server's record and resends what is missing.
 - **Fair scoring.** Solves count only while the event is running, are ordered by the server's clock,
