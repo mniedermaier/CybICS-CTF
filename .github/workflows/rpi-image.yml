@@ -136,15 +136,15 @@ jobs:
           ### Settings before the first boot
 
           The SD card's boot partition shows up on any computer. Edit \`cybics-mgmt.txt\` there:
-          Wi-Fi name, password and country, the admin password, the enrolment code the boards use.
+          Wi-Fi name, password and country, and the enrolment code the boards use.
           **Change the Wi-Fi password** (default \`cybics-mgmt\`) and set your country.
 
           ### Connecting
 
           - Wi-Fi \`cybics-mgmt\`, password \`cybics-mgmt\` (unless changed).
           - Web interface: \`http://10.42.0.1\` or \`http://cybics-mgmt.local\`.
-          - The first visit to \`http://10.42.0.1/admin\` sets the admin password (unless set in
-            \`cybics-mgmt.txt\`); do it before participants join the network.
+          - The first visit to \`http://10.42.0.1/admin\` sets the admin password; do it before
+            participants join the network.
           - SSH: \`pi\` / \`raspberry\`. **Change it** under *Passwords* in the web interface.
 
           The first boot loads the containers and takes a few minutes; later boots take seconds.

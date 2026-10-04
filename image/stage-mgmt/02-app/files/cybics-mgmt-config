@@ -5,6 +5,7 @@ Apply /boot/firmware/cybics-mgmt.txt at boot (cybics-mgmt-config.service).
 Runs before NetworkManager and the CybICS-mgmt containers start. Writes the
 access point's SSID and password into its NetworkManager profile, sets the
 Wi-Fi country, and writes the server's settings into /opt/cybics-mgmt/.env.
+No password goes there: the admin password is set in the browser.
 Anything not valid is reported and replaced by its default.
 """
 import os
@@ -21,15 +22,13 @@ CHECKS = {
     "WIFI_SSID": (lambda v: 1 <= len(v.encode()) <= 32 and v.isprintable(), "1 to 32 characters"),
     "WIFI_PASSWORD": (lambda v: re.fullmatch(r"[\x20-\x7e]{8,63}", v), "8 to 63 printable ASCII characters"),
     "WIFI_COUNTRY": (lambda v: re.fullmatch(r"[A-Z]{2}", v), "a two-letter country code"),
-    "ADMIN_PASSWORD": (lambda v: v == "" or (len(v) >= 8 and "'" not in v and v.isprintable()),
-                       "empty, or at least 8 characters without a ' quote"),
     "DEFAULT_ENROL_CODE": (lambda v: v == "" or re.fullmatch(r"[A-Z0-9][A-Z0-9-]{3,15}", v),
                            "empty, or 4 to 16 letters, digits or dashes"),
     "SERVER_NAME": (lambda v: 1 <= len(v) <= 64 and "'" not in v and v.isprintable(),
                     "1 to 64 characters without a ' quote"),
 }
 DEFAULTS = {"WIFI_SSID": "cybics-mgmt", "WIFI_PASSWORD": "cybics-mgmt", "WIFI_COUNTRY": "US",
-            "ADMIN_PASSWORD": "", "DEFAULT_ENROL_CODE": "CYBICS-BOARDS", "SERVER_NAME": "CybICS-mgmt"}
+            "DEFAULT_ENROL_CODE": "CYBICS-BOARDS", "SERVER_NAME": "CybICS-mgmt"}
 
 
 def read_settings(path, problems):
@@ -46,6 +45,9 @@ def read_settings(path, problems):
             continue
         key, sep, value = line.partition("=")
         key, value = key.strip().upper(), value.strip()
+        if key == "ADMIN_PASSWORD":
+            problems.append(f"line {number}: ADMIN_PASSWORD is not used; the first visit to /admin sets it")
+            continue
         if not sep or key not in CHECKS:
             problems.append(f"line {number}: unknown setting {key!r}")
             continue
@@ -90,8 +92,6 @@ def write_env(settings):
         f"MGMT_SERVER_NAME='{settings['SERVER_NAME']}'",
         f"MGMT_DEFAULT_ENROL_CODE='{settings['DEFAULT_ENROL_CODE']}'",
     ]
-    if settings["ADMIN_PASSWORD"]:
-        lines.append(f"MGMT_ADMIN_PASSWORD='{settings['ADMIN_PASSWORD']}'")
     os.makedirs(os.path.dirname(ENV_FILE), exist_ok=True)
     fd = os.open(ENV_FILE + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:

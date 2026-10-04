@@ -13,10 +13,9 @@ WIFI_PASSWORD=cybics-mgmt
 # Two-letter country code, e.g. DE, AT, CH, GB, US. Wi-Fi stays off without it.
 WIFI_COUNTRY=US
 
-# Password of the web interface, at least 8 characters, no ' quote. Leave it
-# empty to set it in the browser at the first visit to http://10.42.0.1/admin
-# (do that before participants join the network: whoever comes first sets it).
-ADMIN_PASSWORD=
+# The password of the web interface is not set here: the first visit to
+# http://10.42.0.1/admin sets it in the browser. Do that before participants
+# join the network, because whoever comes first sets it.
 
 # The enrolment code CybICS boards use to join on their own on this network.
 # It has to match the boards. Empty: boards are not enrolled automatically.

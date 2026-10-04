@@ -142,7 +142,7 @@ def setup():
     """
     The first visit sets the admin password, unless MGMT_ADMIN_PASSWORD is set.
     Whoever comes first decides: set it before participants join the network,
-    or set MGMT_ADMIN_PASSWORD (ADMIN_PASSWORD in the Pi's cybics-mgmt.txt).
+    or set MGMT_ADMIN_PASSWORD.
     """
     if not admin_setup_needed():
         return redirect(url_for("admin.login"))

@@ -8,7 +8,6 @@ import os
 import re
 
 AP_PROFILE = "/etc/NetworkManager/system-connections/cybics-mgmt-ap.nmconnection"
-ENV_FILE = "/opt/cybics-mgmt/.env"
 PROBLEMS_FILE = "/run/cybics-mgmt/config-problems"
 HOST_STATUS = "/run/cybics-mgmt/status.json"
 ISSUE = "/etc/issue.d/cybics-mgmt.issue"
@@ -26,10 +25,7 @@ def main():
     profile = read(AP_PROFILE)
     ssid = (re.search(r"(?m)^ssid=(.*)$", profile) or [None, "?"])[1]
     psk = (re.search(r"(?m)^psk=(.*)$", profile) or [None, "?"])[1]
-    if "MGMT_ADMIN_PASSWORD=" in read(ENV_FILE):
-        admin = "as set in cybics-mgmt.txt"
-    else:
-        admin = "set at the first visit to /admin (if not set yet)"
+    admin = "set at the first visit to /admin (if not set yet)"
     try:
         pi_default = json.loads(read(HOST_STATUS) or "{}").get("pi_default_password") is True
     except ValueError:

@@ -196,7 +196,7 @@ that also hosts the Wi-Fi network. Every release has the SD card image attached
 1. Write the image to an SD card (`xzcat *-CybICS-mgmt.img.xz | sudo dd of=/dev/sdX bs=4M
    conv=fsync status=progress`, or Raspberry Pi Imager under "Use custom").
 2. Before the first boot, open the card's boot partition on any computer and edit `cybics-mgmt.txt`:
-   Wi-Fi name, **password** and **country**, the admin password, the boards' enrolment code. It is
+   Wi-Fi name, **password** and **country**, and the boards' enrolment code. It is
    read at every boot, and the console lists any value it could not use.
 3. Boot the Pi. The first boot loads the containers and takes a few minutes.
 4. Join the Wi-Fi with a laptop and open `http://10.42.0.1/admin`. The first visit sets the admin
